@@ -241,11 +241,11 @@ class MemoryClient(BaseLLMService):
             ]
 
             if not relevant:
-                logger.debug(
-                    "REST fetch returned no items mentioning %s — falling back to semantic search",
-                    month,
-                )
-                return await self._search(f"bank statement {month}")
+                # REST API succeeded but no memories mention this month.
+                # Return empty so main.py treats it as a missing month and
+                # excludes it from the analysis rather than hallucinating data.
+                logger.debug("No memories found mentioning %s via REST API", month)
+                return ""
 
             deduplicated = self._deduplicate_by_title(relevant)
             # Sort by title so multi-chunk PDFs appear in order (Part 1, 2, …)
