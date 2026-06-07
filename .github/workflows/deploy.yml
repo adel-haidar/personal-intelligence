@@ -1,0 +1,108 @@
+name: Deploy personal-intelligence
+
+on:
+  push:
+    branches: [main]
+
+# Required for OIDC token request
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+
+  # ─────────────────────────────────────────────
+  # JOB 1 — Backend → EC2
+  # ─────────────────────────────────────────────
+  deploy-backend:
+    name: Deploy Backend to EC2
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.head_commit.message, '[deploy-all]') ||
+      !startsWith(github.event.head_commit.message, 'feat(dashboard)')
+
+    steps:
+      - name: SSH into EC2 and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            echo "==> Pulling latest code..."
+            cd ~/personal-intelligence
+            git pull origin main
+
+            echo "==> Activating venv and installing dependencies..."
+            source .venv/bin/activate
+            pip install -r requirements.txt --quiet
+
+            echo "==> Restarting services..."
+            sudo systemctl restart adel-intelligence-memory
+            sudo systemctl restart adel-intelligence-email
+            sudo systemctl restart adel-intelligence-files
+            sudo systemctl restart nginx
+
+            echo "==> Verifying services are running..."
+            sudo systemctl is-active --quiet adel-intelligence-memory && echo "memory: OK"
+            sudo systemctl is-active --quiet adel-intelligence-email  && echo "email:  OK"
+            sudo systemctl is-active --quiet adel-intelligence-files  && echo "files:  OK"
+
+  # ─────────────────────────────────────────────
+  # JOB 2 — Dashboard → S3 + CloudFront
+  # ─────────────────────────────────────────────
+  deploy-dashboard:
+    name: Deploy Vue Dashboard to S3 + CloudFront
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.head_commit.message, '[deploy-all]') ||
+      !startsWith(github.event.head_commit.message, 'feat(backend)')
+
+    defaults:
+      run:
+        working-directory: dashboard  # ← adjust to your Vue app folder name
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: dashboard/package-lock.json  # ← adjust
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Vue app
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          VITE_OAUTH_CLIENT_ID: ${{ secrets.VITE_OAUTH_CLIENT_ID }}
+
+      # ↓ OIDC — no stored AWS keys needed
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-central-1
+
+      - name: Sync dist/ to S3
+        run: |
+          aws s3 sync dist/ s3://${{ secrets.S3_DASHBOARD_BUCKET }} \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "index.html"
+
+          aws s3 cp dist/index.html s3://${{ secrets.S3_DASHBOARD_BUCKET }}/index.html \
+            --cache-control "no-cache, no-store, must-revalidate"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
