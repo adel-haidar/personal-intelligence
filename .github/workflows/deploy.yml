@@ -33,24 +33,22 @@ jobs:
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
-            --parameters 'commands=[
-              "set -e",
-              "echo ==> Pulling latest code...",
-              "cd ~/personal-intelligence",
-              "git pull origin main",
-              "echo ==> Activating venv and installing dependencies...",
-              "source .venv/bin/activate",
-              "pip install -r requirements.txt --quiet",
-              "echo ==> Restarting services...",
-              "sudo systemctl restart adel-intelligence-memory",
-              "sudo systemctl restart adel-intelligence-email",
-              "sudo systemctl restart adel-intelligence-files",
-              "sudo systemctl restart nginx",
-              "echo ==> Verifying services...",
-              "sudo systemctl is-active --quiet adel-intelligence-memory && echo memory: OK",
-              "sudo systemctl is-active --quiet adel-intelligence-email  && echo email:  OK",
-              "sudo systemctl is-active --quiet adel-intelligence-files  && echo files:  OK"
-            ]' \
+            --parameters "commands=[
+              \"set -e\",
+              \"echo ==> Pulling latest code...\",
+              \"sudo -u ${{ secrets.EC2_USER }} bash -c 'cd ~/personal-intelligence && git pull origin main'\",
+              \"echo ==> Installing dependencies...\",
+              \"sudo -u ${{ secrets.EC2_USER }} bash -c 'cd ~/personal-intelligence && source .venv/bin/activate && pip install -r requirements.txt --quiet'\",
+              \"echo ==> Restarting services...\",
+              \"systemctl restart adel-intelligence-memory\",
+              \"systemctl restart adel-intelligence-email\",
+              \"systemctl restart adel-intelligence-files\",
+              \"systemctl restart nginx\",
+              \"echo ==> Verifying services...\",
+              \"systemctl is-active --quiet adel-intelligence-memory && echo memory: OK\",
+              \"systemctl is-active --quiet adel-intelligence-email  && echo email:  OK\",
+              \"systemctl is-active --quiet adel-intelligence-files  && echo files:  OK\"
+            ]" \
             --timeout-seconds 120 \
             --query "Command.CommandId" \
             --output text)
