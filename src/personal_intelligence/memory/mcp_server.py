@@ -5,11 +5,13 @@
 from mcp.server.fastmcp import FastMCP
 from mcp.server.auth.provider import TokenVerifier, AccessToken
 from mcp.server.auth.settings import AuthSettings
+from mcp.server.transport_security import TransportSecuritySettings
 
 from personal_intelligence.auth.oauth import validate_token as check_token
 from personal_intelligence.memory.service import (
     delete_memory,
     fetch_memory,
+    init_db,
     save_memory,
     search_memories,
     update_memory,
@@ -18,6 +20,28 @@ from personal_intelligence.memory.service import (
 auth_settings = AuthSettings(
     issuer_url="https://adel-intelligence.com",
     resource_server_url="https://adel-intelligence.com",
+)
+
+# FastMCP defaults host="127.0.0.1", which auto-enables DNS rebinding protection
+# allowing only localhost hosts. Explicitly allow the production domain so requests
+# arriving through CloudFront → nginx (Host: adel-intelligence.com) are not rejected
+# with 421. Localhost variants are kept for the agents service connecting directly.
+transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=[
+        "adel-intelligence.com",
+        "127.0.0.1",
+        "127.0.0.1:*",
+        "localhost",
+        "localhost:*",
+    ],
+    allowed_origins=[
+        "https://adel-intelligence.com",
+        "http://127.0.0.1",
+        "http://127.0.0.1:*",
+        "http://localhost",
+        "http://localhost:*",
+    ],
 )
 
 
@@ -29,7 +53,12 @@ class PostgresTokenVerifier(TokenVerifier):
         return AccessToken(token=token, client_id=client_id, scopes=[])
 
 
-mcp = FastMCP("memory", token_verifier=PostgresTokenVerifier(), auth=auth_settings)
+mcp = FastMCP(
+    "memory",
+    token_verifier=PostgresTokenVerifier(),
+    auth=auth_settings,
+    transport_security=transport_security,
+)
 
 
 @mcp.tool()
@@ -88,3 +117,6 @@ def delete(memory_id: str, confirm: bool) -> str:
     if not deleted:
         return f"No memory found with ID {memory_id}"
     return f"Deleted memory {memory_id}"
+
+
+init_db()
