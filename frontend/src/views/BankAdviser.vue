@@ -733,7 +733,18 @@ onBeforeUnmount(destroyCharts)
           </table>
         </div>
 
-        <!-- ROW E — Charts -->
+        <!-- ROW E — Agent reasoning -->
+        <div v-if="result.reasoning" class="section-block">
+          <div class="section-label">AGENT REASONING</div>
+          <textarea
+            class="reasoning-area"
+            readonly
+            :value="result.reasoning"
+            rows="5"
+          />
+        </div>
+
+        <!-- ROW F — Charts -->
         <div class="section-block">
           <div class="charts-grid">
 
@@ -1356,6 +1367,26 @@ onBeforeUnmount(destroyCharts)
 .chart-wrap canvas {
   width: 100% !important;
   height: 100% !important;
+}
+
+/* ── Agent reasoning ────────────────────────────────────────────────── */
+.reasoning-area {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 14px 16px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.reasoning-area:focus {
+  outline: none;
 }
 
 /* ── Utilities ──────────────────────────────────────────────────────── */

@@ -133,6 +133,7 @@ export interface BankAdviserResult {
   recommendations:     Recommendation[]
   savings_opportunities: SavingsOpportunity[]
   chart_data:          ChartData
+  reasoning?:          string
 }
 
 // ── Composable ─────────────────────────────────────────────────────────────

@@ -555,7 +555,9 @@ Return ONLY the following JSON. Fill every field. Use null only where data is ge
     "savings_progress_line": [
       {{"month": "<YYYY-MM>", "cumulative_savings": 0.0, "target_line": 0.0}}
     ]
-  }}
+  }},
+
+  "reasoning": "<Plain-text explanation (3–8 sentences) of how you derived the results: which months had data, how many transactions you found, how income and expenses were computed, whether pre-computed values were used, and any data gaps or caveats that affected the output. Be specific — mention actual amounts and months. This field is shown directly to the user as a transparency log.>"
 }}
 
 <bank-statement>
