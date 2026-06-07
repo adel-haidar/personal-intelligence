@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { requireAuth, refreshTokens } from '../composables/useAuth'
-import UploadZone from './UploadZone.vue'
 
 const API_BASE = import.meta.env.DEV ? '' : 'https://adel-intelligence.com'
 

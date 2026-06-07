@@ -1,9 +1,12 @@
 from functools import lru_cache
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = {"env_file": ".env"}
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",  # silently ignores vars not defined as fields
+    )
 
     db_host: str = "localhost"
     db_name: str = "postgres"

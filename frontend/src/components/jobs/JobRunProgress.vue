@@ -34,7 +34,7 @@ watch(() => store.state.runStatus, (status) => {
 
     if (status === 'done') {
       doneMatchCount.value  = store.state.matches.length
-      doneStrongCount.value = store.strongMatchCount.value
+      doneStrongCount.value = store.strongMatchCount
       dismissTimer = setTimeout(() => store.dismissRunStatus(), 5000)
     }
   }
