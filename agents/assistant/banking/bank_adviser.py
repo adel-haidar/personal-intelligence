@@ -468,19 +468,15 @@ Return ONLY the following JSON. Fill every field. Use null only where data is ge
 
     "anomalies": [
       {{
-        "category":    "<category_key>",
-        "description": "<human-readable explanation>",
-        "amount":       0.0,
-        "severity":    "info | warning | critical"
+        "category": "<category_key>",
+        "message":  "<human-readable explanation>",
+        "amount":    0.0,
+        "severity": "info | warning | critical"
       }}
     ],
 
     "month_over_month": {{
-      "available": false,
-      "note": "<e.g. 'Prior month data loaded from memory' or 'No prior data available'>",
-      "changes": [
-        {{"category": "<cat>", "previous": 0.0, "current": 0.0, "change_pct": 0.0}}
-      ]
+      "<category_key>": {{"delta_eur": 0.0, "trend": "up | down | stable"}}
     }}
   }},
 

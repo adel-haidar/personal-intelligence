@@ -60,23 +60,16 @@ class BaseLLMService:
         return response["output"]["message"]["content"][0]["text"]
 
     def _strip_markdown(self, text: str) -> str:
-        """Remove markdown code fences from a string if present.
+        """Extract the outermost JSON object from a model response.
 
-        Some models wrap their JSON output in a markdown code block like:
-            ```json
-            { ... }
-            ```
-        This method strips those fences so the result can be parsed as plain JSON.
-
-        Args:
-            text: The raw string from the model, possibly wrapped in backticks.
-
-        Returns:
-            The string with any leading/trailing code fences removed.
+        Handles markdown code fences and any prose the model adds before or
+        after the JSON block by slicing from the first '{' to the last '}'.
         """
         if text.startswith("```"):
-            # Remove first line (```json, ```python, ```anything)
             text = text.split("\n", 1)[-1]
-            # Remove trailing ```
             text = text.removesuffix("```").strip()
-        return text
+        start = text.find("{")
+        end   = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return text[start:end + 1]
+        return text.strip()
