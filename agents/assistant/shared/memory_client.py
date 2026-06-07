@@ -103,6 +103,14 @@ class MemoryClient(BaseLLMService):
 
     _BANK_STATEMENT_QUERY = "Konto Auszug"
 
+    # Keywords that indicate a memory is a bank statement (not infra logs etc.)
+    _BANK_STATEMENT_KEYWORDS = [
+        "kontoauszug", "konto", "iban", "bic", "buchung", "gutschrift",
+        "lastschrift", "überweisung", "saldo", "girokonto", "sparkasse",
+        "volksbank", "commerzbank", "deutsche bank", "dkb", "ing", "n26",
+        "comdirect", "postbank", "bank", "habensaldo", "sollsaldo",
+    ]
+
     # Semantic queries for supplementary financial context (prior analyses,
     # spending notes, savings goals). The bank statement itself is fetched
     # separately via fetch_bank_statement().
@@ -201,6 +209,18 @@ class MemoryClient(BaseLLMService):
             or f"{mon}/{year}" in text  # 01/2026
         )
 
+    def _looks_like_bank_statement(self, item: dict) -> bool:
+        """Return True if the memory appears to be a bank statement.
+
+        Checks title and content for German banking keywords to exclude
+        technical logs, infrastructure notes, and other non-financial memories
+        that happen to mention the target month.
+        """
+        haystack = (
+            (item.get("title") or "") + " " + (item.get("content") or "")
+        ).lower()
+        return any(kw in haystack for kw in self._BANK_STATEMENT_KEYWORDS)
+
     def _deduplicate_by_title(self, items: list[dict]) -> list[dict]:
         """Keep only the most recently created memory per exact title.
 
@@ -232,19 +252,26 @@ class MemoryClient(BaseLLMService):
         """
         try:
             # Primary: paginated REST API — deterministic and exhaustive
-            all_items = await self._list_memories_api(query=month, page_size=100)
+            # Search for "Konto Auszug <month>" to bias toward bank statements
+            all_items = await self._list_memories_api(
+                query=f"Konto Auszug {month}", page_size=100
+            )
 
             relevant = [
                 item for item in all_items
-                if self._mentions_month(item.get("content", ""), month)
-                or self._mentions_month(item.get("title", ""), month)
+                if (
+                    self._mentions_month(item.get("content", ""), month)
+                    or self._mentions_month(item.get("title", ""), month)
+                )
+                and self._looks_like_bank_statement(item)
             ]
 
             if not relevant:
-                # REST API succeeded but no memories mention this month.
-                # Return empty so main.py treats it as a missing month and
-                # excludes it from the analysis rather than hallucinating data.
-                logger.debug("No memories found mentioning %s via REST API", month)
+                logger.debug(
+                    "No bank-statement memories found for %s via REST API "
+                    "(checked %d items total)",
+                    month, len(all_items),
+                )
                 return ""
 
             deduplicated = self._deduplicate_by_title(relevant)
