@@ -19,4 +19,4 @@ app = FastAPI(title="Personal Intelligence API", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(memory_router)
 
-app.mount("/mcp", mcp.get_asgi_app())
+app.mount("/mcp", mcp.streamable_http_app())
