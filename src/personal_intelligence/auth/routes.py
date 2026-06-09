@@ -78,9 +78,7 @@ async def oauth_authorization_server():
 # ---------------------------------------------------------------------------
 
 @router.post("/api/oauth/register")
-async def register(request: Request, pi_session: str | None = Cookie(default=None)):
-    if not _is_authenticated(pi_session):
-        raise HTTPException(status_code=401, detail="not authenticated")
+async def register(request: Request):
     body = await request.json()
     result = register_client(
         client_name=body.get("client_name", "unknown"),
