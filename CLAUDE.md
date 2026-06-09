@@ -10,6 +10,13 @@
    - Dashboard-only change: prefix `feat(dashboard):` / `fix(dashboard):`
    - Both changed: use `[deploy-all]` anywhere in the message
 3. `git push origin main`
+   - If push fails with `Permission denied (publickey)`, the SSH agent isn't running.
+     Run everything in **one shell call** so the agent environment persists:
+     ```
+     eval $(ssh-agent) && ssh-add ~/.ssh/github && git push origin main
+     ```
+     Each Bash tool call is a separate shell — `eval $(ssh-agent)` in one call and
+     `git push` in the next will always fail because `SSH_AUTH_SOCK` is lost.
 
 **That's it.** GitHub Actions handles the rest automatically:
 - Backend changes → SSH into EC2, git pull, pip install, restart systemd services

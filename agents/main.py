@@ -13,6 +13,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from assistant.banking.bank_adviser import BankAdviser
+from assistant.banking.models import BankAdviserResult
 from assistant.job.router import router as job_router
 from assistant.email.auth_service import MicrosoftTokenStore, get_token_store
 from assistant.email.email_assessor import EmailAssessor
@@ -233,7 +234,7 @@ def sync_email(token_store: TokenStoreDep, settings: SettingsDep, _: str = Depen
     return result
 
 
-@app.post("/api/banking/analyse")
+@app.post("/api/banking/analyse", response_model=BankAdviserResult)
 async def analyse_bank_statement(req: AnalyseRequest, settings: SettingsDep, _: str = Depends(require_auth)):
     """Run a multi-month financial analysis using bank statements from MCP memory.
 
@@ -300,4 +301,5 @@ async def analyse_bank_statement(req: AnalyseRequest, settings: SettingsDep, _: 
         model_id=settings.bedrock_model_id,
     )
 
-    return bank_adviser.analyse(statement=statements_context, context=combined_context)
+    raw = bank_adviser.analyse(statement=statements_context, context=combined_context)
+    return BankAdviserResult.model_validate(raw)
