@@ -63,35 +63,47 @@ async def get_creators(client_id: str = Depends(_require_auth)):
     return list_creators(active_only=True)
 
 
+# Sort modes for the PULSE feed (Phase 5). Values are vetted ORDER BY clauses —
+# the user-supplied `sort` key never reaches the SQL directly.
+_POST_SORTS = {
+    "latest": "p.created_at DESC",
+    "top": "p.score DESC, p.created_at DESC",
+    "unrated": "p.total_interactions ASC, p.created_at DESC",
+}
+
+
 @router.get("/posts")
 async def get_posts(
     page: int = 1,
     page_size: int = 20,
     creator_id: Optional[str] = None,
+    sort: str = "latest",
     client_id: str = Depends(_require_auth),
 ):
+    order_by = _POST_SORTS.get(sort)
+    if order_by is None:
+        raise HTTPException(
+            status_code=422, detail=f"sort must be one of {sorted(_POST_SORTS)}"
+        )
     offset = (page - 1) * page_size
     conn = _connect()
     cur = conn.cursor(cursor_factory=RealDictCursor)
+    select = """SELECT p.*, c.name AS creator_name, c.avatar_url AS creator_avatar,
+                       c.slug AS creator_slug, c.score AS creator_score, c.bio AS creator_bio
+                FROM content_posts p
+                JOIN content_creators c ON c.id = p.creator_id"""
     if creator_id:
         cur.execute("SELECT COUNT(*) FROM content_posts WHERE creator_id = %s", (creator_id,))
         total = cur.fetchone()["count"]
         cur.execute(
-            """SELECT p.*, c.name AS creator_name, c.avatar_url AS creator_avatar
-               FROM content_posts p
-               JOIN content_creators c ON c.id = p.creator_id
-               WHERE p.creator_id = %s
-               ORDER BY p.created_at DESC LIMIT %s OFFSET %s""",
+            f"{select} WHERE p.creator_id = %s ORDER BY {order_by} LIMIT %s OFFSET %s",
             (creator_id, page_size, offset),
         )
     else:
         cur.execute("SELECT COUNT(*) FROM content_posts")
         total = cur.fetchone()["count"]
         cur.execute(
-            """SELECT p.*, c.name AS creator_name, c.avatar_url AS creator_avatar
-               FROM content_posts p
-               JOIN content_creators c ON c.id = p.creator_id
-               ORDER BY p.created_at DESC LIMIT %s OFFSET %s""",
+            f"{select} ORDER BY {order_by} LIMIT %s OFFSET %s",
             (page_size, offset),
         )
     rows = [_serialize_row(dict(r)) for r in cur.fetchall()]
