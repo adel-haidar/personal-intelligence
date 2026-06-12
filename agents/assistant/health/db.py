@@ -20,7 +20,10 @@ CREATE TABLE IF NOT EXISTS health_metrics (
     UNIQUE (recorded_at, metric_type, source)
 );
 CREATE INDEX IF NOT EXISTS idx_hm_type_time ON health_metrics (metric_type, recorded_at DESC);
-CREATE INDEX IF NOT EXISTS idx_hm_date ON health_metrics (date_trunc('day', recorded_at));
+-- NOTE: no expression index on date_trunc('day', recorded_at) — date_trunc on
+-- timestamptz is STABLE, not IMMUTABLE, so Postgres rejects it in an index
+-- expression (42P17) and the whole multi-statement DDL rolls back with it.
+CREATE INDEX IF NOT EXISTS idx_hm_source_time ON health_metrics (source, recorded_at DESC);
 """
 
 _pool: Optional[asyncpg.Pool] = None
@@ -29,9 +32,17 @@ _pool: Optional[asyncpg.Pool] = None
 async def init_pool(database_url: str) -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(database_url)
-        async with _pool.acquire() as conn:
-            await conn.execute(_DDL)
+        # Publish the global only after the schema is verified — otherwise a DDL
+        # failure leaves a half-initialized pool that every later request reuses
+        # while the table doesn't exist.
+        pool = await asyncpg.create_pool(database_url)
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(_DDL)
+        except Exception:
+            await pool.close()
+            raise
+        _pool = pool
         logger.info("Health DB pool initialized and schema verified")
     return _pool
 
