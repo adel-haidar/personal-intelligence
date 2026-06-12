@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import {
   Chart,
   ArcElement, DoughnutController,
@@ -27,9 +27,58 @@ Chart.register(
   Tooltip,
 )
 
-// ── Composable ─────────────────────────────────────────────────────────────
+import { useInvesting, useDayTrading } from '../composables/useAdvisory'
+import type { TradeMarket } from '../composables/useAdvisory'
 
-const { status, result, error, lastRun, runAnalysis } = useBankAdviser()
+// ── Composables ────────────────────────────────────────────────────────────
+
+const { status, result, error, lastRun, cached, runAnalysis, loadLatest } = useBankAdviser()
+
+const {
+  status: invStatus, result: invResult, savedAt: invSavedAt, cached: invCached,
+  error: invError, run: runInvesting, loadLatest: loadInvesting,
+} = useInvesting()
+
+const {
+  status: dtStatus, result: dtResult, savedAt: dtSavedAt, cached: dtCached,
+  error: dtError, snapshotMeta: dtMeta, run: runDayTrading, loadLatest: loadDayTrading,
+} = useDayTrading()
+
+// Load the cached analyses on page load — no recompute until explicitly run.
+onMounted(() => {
+  loadLatest()
+  loadInvesting()
+  loadDayTrading()
+})
+
+// ── Advisory helpers ────────────────────────────────────────────────────────
+
+const MARKET_LABELS: Record<TradeMarket, string> = {
+  us:             'US',
+  europe:         'EUROPE',
+  southeast_asia: 'SE ASIA',
+}
+
+function tradeActionBadge(action: string): { label: string; cls: string } {
+  if (action === 'buy')  return { label: 'BUY',  cls: 'badge--active' }
+  if (action === 'sell') return { label: 'SELL', cls: 'badge--error' }
+  return                        { label: 'HOLD', cls: 'badge--standby' }
+}
+
+function allocActionBadge(action: string): { label: string; cls: string } {
+  if (action === 'increase' || action === 'open')  return { label: action.toUpperCase(), cls: 'badge--active' }
+  if (action === 'decrease' || action === 'close') return { label: action.toUpperCase(), cls: 'badge--error' }
+  return                                                  { label: 'HOLD', cls: 'badge--standby' }
+}
+
+function pct(v: number | null | undefined): string {
+  return Number.isFinite(v as number) ? `${(v as number).toFixed(1)}%` : '—'
+}
+
+function savedAtLabel(d: Date | null, isCached: boolean): string {
+  if (!d) return ''
+  return `${isCached ? 'CACHED' : 'UPDATED'} ${d.toISOString().slice(0, 16).replace('T', ' ')}Z`
+}
 
 // ── Period selector state ──────────────────────────────────────────────────
 
@@ -87,12 +136,19 @@ function handleRun() {
 // ── Formatting helpers ─────────────────────────────────────────────────────
 
 function eur(val: number, showSign = false): string {
+  if (!Number.isFinite(val)) return '—'
   const formatted = new Intl.NumberFormat('de-DE', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   }).format(Math.abs(val))
   const prefix = showSign ? (val >= 0 ? '+' : '−') : (val < 0 ? '−' : '')
   return `${prefix}€${formatted}`
+}
+
+/** Coerce an LLM-provided value to a finite number, or null. */
+function num(val: unknown): number | null {
+  const n = typeof val === 'string' ? parseFloat(val) : (val as number)
+  return Number.isFinite(n) ? n : null
 }
 
 function fmtDate(iso: string): string {
@@ -115,7 +171,7 @@ const periodLabel = computed(() => {
 // ── Variance formatter ───────────────────────────────────────────────────────
 
 function formatVariance(delta: number | null): string {
-  if (delta === null) return '—'
+  if (delta === null || !Number.isFinite(delta)) return '—'
   return `${delta >= 0 ? '+' : ''}€${Math.abs(delta).toFixed(2)}`
 }
 
@@ -168,14 +224,22 @@ function statusBadge(s: 'ok' | 'over' | 'under' | 'tracked'): { label: string; c
 
 const spendingRows = computed((): SpendingRow[] => {
   const cats = result.value?.spending_analysis.categories ?? {}
-  const rows: SpendingRow[] = Object.entries(cats).map(([k, v]: [string, CategoryBreakdown]) => ({
-    key:      k,
-    label:    formatCategoryLabel(k),
-    budget:   v.budget,
-    actual:   v.actual,
-    variance: v.delta,
-    status:   v.status,
-  }))
+  const rows: SpendingRow[] = Object.entries(cats).map(([k, raw]) => {
+    // The LLM occasionally renames fields (budget_eur, spent, variance...).
+    // Normalize defensively so a schema drift renders as '—', never €NaN.
+    const v = (typeof raw === 'object' && raw !== null ? raw : { actual: raw }) as
+      Partial<CategoryBreakdown> & Record<string, unknown>
+    const budget = num(v.budget) ?? num(v.budget_eur) ?? num(v.budgeted) ?? null
+    const actual = num(v.actual) ?? num(v.actual_eur) ?? num(v.spent) ?? num(v.amount) ?? 0
+    const variance = num(v.delta) ?? num(v.variance) ?? num(v.delta_eur)
+      ?? (budget !== null ? budget - actual : null)
+    const status = (['ok', 'over', 'under', 'tracked'] as const).includes(
+      v.status as 'ok' | 'over' | 'under' | 'tracked',
+    )
+      ? (v.status as 'ok' | 'over' | 'under' | 'tracked')
+      : budget === null ? 'tracked' : actual > budget * 1.05 ? 'over' : 'ok'
+    return { key: k, label: formatCategoryLabel(k), budget, actual, variance, status }
+  })
   const order: Record<string, number> = { over: 0, ok: 1, under: 2, tracked: 3 }
   return rows.sort((a, b) => (order[a.status] ?? 99) - (order[b.status] ?? 99))
 })
@@ -431,6 +495,7 @@ onBeforeUnmount(destroyCharts)
         <h1 class="page-title">BANK ADVISER</h1>
       </div>
       <div v-if="lastRun" class="header-meta">
+        <span v-if="cached" class="badge badge--standby">CACHED</span>&nbsp;
         LAST ANALYSIS:&nbsp;
         <span class="mono">{{ result?.meta.analysis_date ?? fmtDate(lastRun.toISOString().slice(0,10)) }}</span>
       </div>
@@ -773,6 +838,228 @@ onBeforeUnmount(destroyCharts)
         </div>
 
       </template>
+
+      <!-- ── 4. Investment recommendations ─────────────────────────────── -->
+      <div class="rule rule--gap" />
+      <div class="adv-header">
+        <div class="header-left">
+          <span class="page-tag">SECTION</span>
+          <h2 class="page-title">INVESTMENT RECOMMENDATIONS</h2>
+        </div>
+        <div class="adv-header-actions">
+          <span v-if="invSavedAt" class="header-meta mono">{{ savedAtLabel(invSavedAt, invCached) }}</span>
+          <button
+            class="btn btn--primary"
+            :disabled="invStatus === 'loading'"
+            @click="runInvesting"
+          >
+            {{ invStatus === 'loading' ? 'ANALYSING...' : invResult ? 'REFRESH' : 'RUN ANALYSIS' }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="invStatus === 'loading' && !invResult" class="loading-state">
+        <div class="progress-track"><div class="progress-fill" /></div>
+        <p class="loading-hint">Reading Trading 212 strategy from MCP memory and building allocation recommendation...</p>
+      </div>
+      <div v-if="invStatus === 'error' && invError" class="error-msg">{{ invError }}</div>
+      <p v-if="invStatus === 'idle' && !invResult" class="adv-empty">
+        No investment analysis yet. Upload your Trading 212 strategy to MCP memory, then run the analysis.
+      </p>
+
+      <template v-if="invResult">
+        <div class="kpi-row">
+          <div class="kpi-card kpi-card--wide">
+            <div class="kpi-label">STRATEGY</div>
+            <div class="kpi-sublabel">{{ invResult.current_status.strategy_summary }}</div>
+            <div class="kpi-sublabel kpi-sublabel--muted">{{ invResult.current_status.data_freshness }}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">PORTFOLIO VALUE</div>
+            <div class="kpi-value kpi-value--neutral">
+              {{ invResult.current_status.portfolio_value_eur != null ? eur(invResult.current_status.portfolio_value_eur) : '—' }}
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">SUGGESTED MONTHLY CONTRIBUTION</div>
+            <div class="kpi-value kpi-value--neutral">
+              {{ invResult.monthly_contribution_eur != null ? eur(invResult.monthly_contribution_eur) : '—' }}
+            </div>
+          </div>
+        </div>
+
+        <div v-if="invResult.current_status.holdings.length" class="section-block">
+          <div class="section-label">CURRENT HOLDINGS</div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>NAME</th><th>TICKER</th><th>TYPE</th>
+                <th class="col-num">ALLOCATION</th><th class="col-num">VALUE</th><th>NOTE</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(h, i) in invResult.current_status.holdings" :key="i">
+                <td class="cell-label">{{ h.name }}</td>
+                <td class="mono">{{ h.ticker ?? '—' }}</td>
+                <td class="cell-muted">{{ h.type ?? '—' }}</td>
+                <td class="cell-num mono">{{ pct(h.allocation_pct) }}</td>
+                <td class="cell-num mono">{{ h.value_eur != null ? eur(h.value_eur) : '—' }}</td>
+                <td class="cell-note">{{ h.note ?? '' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section-block">
+          <div class="section-label">ALLOCATION RECOMMENDATION</div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ASSET</th><th>TICKER</th>
+                <th class="col-num">CURRENT</th><th class="col-num">TARGET</th>
+                <th>ACTION</th><th>RATIONALE</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(a, i) in invResult.allocation_recommendation" :key="i">
+                <td class="cell-label">{{ a.asset }}</td>
+                <td class="mono">{{ a.ticker ?? '—' }}</td>
+                <td class="cell-num mono">{{ pct(a.current_pct) }}</td>
+                <td class="cell-num mono">{{ pct(a.target_pct) }}</td>
+                <td>
+                  <span class="badge" :class="allocActionBadge(a.action).cls">
+                    {{ allocActionBadge(a.action).label }}
+                  </span>
+                </td>
+                <td class="cell-note">{{ a.rationale }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-if="invResult.notes.length" class="section-block">
+          <div class="section-label">NOTES</div>
+          <ul class="adv-notes">
+            <li v-for="(n, i) in invResult.notes" :key="i">{{ n }}</li>
+          </ul>
+        </div>
+
+        <div v-if="invResult.reasoning" class="section-block">
+          <div class="section-label">AGENT REASONING</div>
+          <textarea class="reasoning-area" readonly :value="invResult.reasoning" rows="4" />
+        </div>
+      </template>
+
+      <!-- ── 5. Day trading desk ───────────────────────────────────────── -->
+      <div class="rule rule--gap" />
+      <div class="adv-header">
+        <div class="header-left">
+          <span class="page-tag">SECTION</span>
+          <h2 class="page-title">DAY TRADING DESK</h2>
+        </div>
+        <div class="adv-header-actions">
+          <span v-if="dtSavedAt" class="header-meta mono">{{ savedAtLabel(dtSavedAt, dtCached) }}</span>
+          <button
+            class="btn btn--primary"
+            :disabled="dtStatus === 'loading'"
+            @click="runDayTrading"
+          >
+            {{ dtStatus === 'loading' ? 'ANALYSING...' : dtResult ? 'REFRESH' : 'RUN ANALYSIS' }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="dtStatus === 'loading' && !dtResult" class="loading-state">
+        <div class="progress-track"><div class="progress-fill" /></div>
+        <p class="loading-hint">Fetching live quotes and headlines (Yahoo Finance, Bloomberg, The Economist, Google Finance) and analysing US / EU / SE-Asian markets...</p>
+      </div>
+      <div v-if="dtStatus === 'error' && dtError" class="error-msg">{{ dtError }}</div>
+      <p v-if="dtStatus === 'idle' && !dtResult" class="adv-empty">
+        No day trading analysis yet. Run one to fetch a live market snapshot and get buy/hold/sell calls.
+      </p>
+
+      <template v-if="dtResult">
+        <div class="region-grid">
+          <div
+            v-for="(regionKey, ) in (['us', 'europe', 'southeast_asia'] as TradeMarket[])"
+            :key="regionKey"
+            class="region-card"
+          >
+            <div class="section-label">{{ MARKET_LABELS[regionKey] }}</div>
+            <div
+              v-for="idx in dtResult.market_overview[regionKey]?.indices ?? []"
+              :key="idx.symbol"
+              class="idx-row"
+            >
+              <span class="idx-name">{{ idx.name }}</span>
+              <span class="mono">{{ idx.price != null ? idx.price.toLocaleString('de-DE') : '—' }}</span>
+              <span
+                class="mono idx-change"
+                :class="(idx.change_pct ?? 0) >= 0 ? 'idx-change--up' : 'idx-change--down'"
+              >
+                {{ idx.change_pct != null ? `${idx.change_pct >= 0 ? '+' : ''}${idx.change_pct.toFixed(2)}%` : '—' }}
+              </span>
+            </div>
+            <p class="region-summary">{{ dtResult.market_overview[regionKey]?.summary }}</p>
+          </div>
+        </div>
+
+        <div class="section-block">
+          <div class="section-label">RECOMMENDATIONS — {{ dtResult.analysis_date }}</div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>TICKER</th><th>NAME</th><th>MARKET</th>
+                <th>ACTION</th><th>CONFIDENCE</th><th>HELD SINCE</th><th>RATIONALE</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(r, i) in dtResult.recommendations" :key="i">
+                <td class="cell-label mono">{{ r.ticker }}</td>
+                <td>{{ r.name }}</td>
+                <td class="cell-muted">{{ MARKET_LABELS[r.market] ?? r.market }}</td>
+                <td>
+                  <span class="badge" :class="tradeActionBadge(r.action).cls">
+                    {{ tradeActionBadge(r.action).label }}
+                  </span>
+                </td>
+                <td>
+                  <span class="badge" :class="fitBadge(r.confidence).cls">
+                    {{ fitBadge(r.confidence).label }}
+                  </span>
+                </td>
+                <td class="mono cell-muted">{{ r.held_since ?? '—' }}</td>
+                <td class="cell-note">{{ r.rationale }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-if="dtResult.changes_since_last" class="section-block">
+          <div class="section-label">CHANGES SINCE LAST ANALYSIS</div>
+          <p class="adv-text">{{ dtResult.changes_since_last }}</p>
+        </div>
+
+        <div class="section-block">
+          <div class="adv-meta-line">
+            <span class="adv-meta-key">SOURCES</span>
+            {{ dtResult.sources_used.join(' · ') }}
+            <template v-if="dtMeta?.sources_failed?.length">
+              <span class="adv-meta-key adv-meta-key--failed">UNAVAILABLE</span>
+              {{ dtMeta.sources_failed.join(' · ') }}
+            </template>
+          </div>
+          <div class="adv-meta-line adv-meta-line--risk">
+            <span class="adv-meta-key">RISK</span>{{ dtResult.risk_note }}
+          </div>
+        </div>
+
+        <div v-if="dtResult.reasoning" class="section-block">
+          <div class="section-label">AGENT REASONING</div>
+          <textarea class="reasoning-area" readonly :value="dtResult.reasoning" rows="4" />
+        </div>
+      </template>
+
     </div><!-- /body -->
   </div><!-- /page -->
 </template>
@@ -1387,6 +1674,125 @@ onBeforeUnmount(destroyCharts)
 
 .reasoning-area:focus {
   outline: none;
+}
+
+/* ── Advisory sections (investments / day trading) ──────────────────── */
+.rule--gap {
+  margin-top: 32px;
+}
+
+.adv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 0 14px;
+}
+
+.adv-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.adv-empty {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, var(--text-secondary));
+  padding: 6px 0 18px;
+}
+
+.kpi-card--wide {
+  grid-column: span 1;
+}
+
+.kpi-sublabel--muted {
+  opacity: 0.6;
+  margin-top: 6px;
+}
+
+.adv-notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+
+.adv-text {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.region-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 1100px) {
+  .region-grid { grid-template-columns: 1fr; }
+}
+
+.region-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+}
+
+.idx-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  font-size: 11px;
+  padding: 4px 0;
+  color: var(--text-secondary);
+}
+
+.idx-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.idx-change--up   { color: var(--status-active); }
+.idx-change--down { color: var(--status-error); }
+
+.region-summary {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 10px 0 0;
+  opacity: 0.85;
+}
+
+.adv-meta-line {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+
+.adv-meta-line--risk {
+  margin-top: 8px;
+  opacity: 0.75;
+}
+
+.adv-meta-key {
+  display: inline-block;
+  margin-right: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  color: var(--text-muted, var(--text-secondary));
+}
+
+.adv-meta-key--failed {
+  margin-left: 14px;
+  color: var(--status-error);
 }
 
 /* ── Utilities ──────────────────────────────────────────────────────── */

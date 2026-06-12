@@ -275,7 +275,35 @@ _ANALYSIS_TOOL_SPEC = {
                     "properties": {
                         "total_expenses":          {"type": "number"},
                         "net_savings_this_period": {"type": "number"},
-                        "categories":              {"type": "object"},
+                        "categories": {
+                            "type": "object",
+                            "description": (
+                                "Map of category name → breakdown. Field names are "
+                                "FIXED: budget, actual, delta, status."
+                            ),
+                            "additionalProperties": {
+                                "type": "object",
+                                "properties": {
+                                    "budget": {"type": ["number", "null"]},
+                                    "actual": {"type": "number"},
+                                    "delta":  {"type": ["number", "null"]},
+                                    "status": {"type": "string", "enum": ["ok", "over", "under", "tracked"]},
+                                    "items": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name":      {"type": "string"},
+                                                "amount":    {"type": "number"},
+                                                "recurring": {"type": "boolean"},
+                                            },
+                                            "required": ["name", "amount"],
+                                        },
+                                    },
+                                },
+                                "required": ["budget", "actual", "delta", "status"],
+                            },
+                        },
                         "anomalies":               {"type": "array"},
                         "month_over_month":        {"type": "object"},
                     },
@@ -455,6 +483,10 @@ Assign every transaction to exactly one category. For ambiguous items prefer the
 
 STEP 2 — SPENDING ANALYSIS
 - Compute actual spend per category. Compare against budget.
+- spending_analysis.categories entries MUST use exactly these keys:
+  {"budget": <monthly budget × months, or null>, "actual": <EUR spent>,
+   "delta": <budget - actual, or null>, "status": "...", "items": [...]}
+  Budgets are MONTHLY floors — multiply by the number of months analysed.
 - Status: "ok" (within budget or ≤5% over) | "over" (>5% over) | "under" (>10% under)
 - Anomalies:
   • Category >20% over budget → severity "warning"

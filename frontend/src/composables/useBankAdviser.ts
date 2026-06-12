@@ -138,15 +138,23 @@ export interface BankAdviserResult {
 
 // ── Composable ─────────────────────────────────────────────────────────────
 
-const ANALYSE_URL = import.meta.env.DEV
-  ? '/api/banking/analyse'
-  : 'https://adel-intelligence.com/api/banking/analyse'
+const BASE = import.meta.env.DEV ? '' : 'https://adel-intelligence.com'
+const ANALYSE_URL = `${BASE}/api/banking/analyse`
+const LATEST_URL  = `${BASE}/api/banking/analysis/latest`
+
+interface CachedAnalysis {
+  saved_at: string
+  mode:     string
+  months:   string[]
+  result:   BankAdviserResult
+}
 
 export function useBankAdviser() {
   const status  = ref<'idle' | 'loading' | 'error' | 'success'>('idle')
   const result  = ref<BankAdviserResult | null>(null)
   const error   = ref<string | null>(null)
   const lastRun = ref<Date | null>(null)
+  const cached  = ref(false)
 
   async function doPost(token: string, params: AnalysisParams): Promise<Response> {
     return fetch(ANALYSE_URL, {
@@ -214,11 +222,47 @@ export function useBankAdviser() {
       result.value  = JSON.parse(body) as BankAdviserResult
       status.value  = 'success'
       lastRun.value = new Date()
+      cached.value  = false
     } catch {
       status.value = 'error'
       error.value  = 'Failed to parse response'
     }
   }
 
-  return { status, result, error, lastRun, runAnalysis }
+  /** Load the latest cached analysis from MCP memory without re-running the
+   *  pipeline. Silently stays idle when none exists yet. */
+  async function loadLatest(): Promise<void> {
+    if (status.value === 'loading') return
+    status.value = 'loading'
+    error.value  = null
+    try {
+      let token = await requireAuth()
+      const doGet = (t: string) =>
+        fetch(LATEST_URL, { headers: { Authorization: `Bearer ${t}` } })
+      let res = await doGet(token)
+      if (res.status === 401) {
+        await refreshTokens()
+        token = await requireAuth()
+        res = await doGet(token)
+      }
+      if (res.status === 404) {
+        status.value = 'idle'
+        return
+      }
+      const body = await res.text()
+      if (!res.ok || body.trimStart().startsWith('<')) {
+        status.value = 'idle'  // cache miss is not an error worth surfacing
+        return
+      }
+      const payload = JSON.parse(body) as CachedAnalysis
+      result.value  = payload.result
+      lastRun.value = payload.saved_at ? new Date(payload.saved_at) : null
+      cached.value  = true
+      status.value  = 'success'
+    } catch {
+      status.value = 'idle'
+    }
+  }
+
+  return { status, result, error, lastRun, cached, runAnalysis, loadLatest }
 }

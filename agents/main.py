@@ -1,10 +1,11 @@
+import json
 import logging
 import httpx
 import boto3
 import os
 
 from calendar import monthrange
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -13,7 +14,10 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from assistant.banking.bank_adviser import BankAdviser
+from assistant.banking.investment_adviser import InvestmentAdviser
 from assistant.banking.models import BankAdviserResult
+from assistant.trading.day_trader import DayTrader
+from assistant.trading.market_data import collect_market_snapshot
 from assistant.health.router import router as health_router
 from assistant.job.router import router as job_router
 from assistant.email.auth_service import MicrosoftTokenStore, get_token_store
@@ -94,6 +98,21 @@ def get_fresh_token() -> str:
         },
     )
     return response.json()["access_token"]
+
+
+def _make_memory_client(settings: Settings) -> MemoryClient:
+    """Build a MemoryClient with a fresh OAuth token (raises 503 if unconfigured)."""
+    if not settings.mcp_memory_url:
+        raise HTTPException(
+            status_code=503,
+            detail="MCP_MEMORY_URL is not configured.",
+        )
+    return MemoryClient(
+        bedrock_client=_get_bedrock_client(settings.aws_region),
+        model_id=settings.bedrock_model_id,
+        server_url=settings.mcp_memory_url,
+        token=get_fresh_token(),
+    )
 
 
 @lru_cache
@@ -298,6 +317,21 @@ async def analyse_bank_statement(req: AnalyseRequest, settings: SettingsDep, _: 
     financial_context = await memory_client.fetch_financial_context()
     combined_context = financial_context + ("\n\n" + req.context if req.context else "")
 
+    # Build on the previously saved analysis instead of starting from scratch.
+    previous = await memory_client.fetch_latest_analysis("bank-adviser")
+    if previous:
+        prev_result = dict(previous.get("result") or {})
+        prev_result.pop("chart_data", None)  # bulky and re-derived each run
+        combined_context = (
+            "<previous-analysis>\n"
+            f"Your previous analysis (saved {previous.get('saved_at', 'unknown')}, "
+            f"months {', '.join(previous.get('months', []))}). Build on it: keep "
+            "category assignments consistent, call out month-over-month changes, "
+            "and note progress against earlier recommendations.\n"
+            f"{json.dumps(prev_result, ensure_ascii=False)}\n"
+            "</previous-analysis>\n\n"
+        ) + combined_context
+
     bank_adviser = BankAdviser(
         bedrock_client=bedrock_client,
         model_id=settings.bedrock_model_id,
@@ -305,7 +339,159 @@ async def analyse_bank_statement(req: AnalyseRequest, settings: SettingsDep, _: 
 
     try:
         raw = bank_adviser.analyse(statement=statements_context, context=combined_context)
-        return BankAdviserResult.model_validate(raw)
+        result = BankAdviserResult.model_validate(raw)
     except Exception as exc:
         logger.exception("BankAdviser analysis failed")
         raise HTTPException(status_code=502, detail=f"Analysis failed: {exc}") from exc
+
+    try:
+        await memory_client.save_analysis(
+            "bank-adviser",
+            {
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "mode":     req.mode,
+                "months":   months,
+                "result":   result.model_dump(),
+            },
+        )
+    except Exception:
+        logger.warning("Failed to cache bank-adviser analysis in MCP memory", exc_info=True)
+
+    return result
+
+
+@app.get("/api/banking/analysis/latest")
+async def latest_bank_analysis(settings: SettingsDep, _: str = Depends(require_auth)):
+    """Return the most recently cached bank analysis from MCP memory.
+
+    Lets the dashboard render the last result instantly instead of re-running
+    the full fetch + LLM pipeline on every page load.
+    """
+    memory_client = _make_memory_client(settings)
+    payload = await memory_client.fetch_latest_analysis("bank-adviser")
+    if not payload:
+        raise HTTPException(status_code=404, detail="No cached analysis available — run one first.")
+    return payload
+
+
+# ── Investment recommendations ─────────────────────────────────────────────────
+
+@app.post("/api/investing/analyse")
+async def analyse_investments(settings: SettingsDep, _: str = Depends(require_auth)):
+    """Analyse Adel's investing position from his Trading 212 strategy in memory.
+
+    Combines the uploaded strategy, the latest cached bank analysis (savings
+    position / investment signal) and the previous investment analysis into a
+    current status + allocation recommendation. The result is cached in MCP
+    memory and returned as {saved_at, result}.
+    """
+    memory_client = _make_memory_client(settings)
+
+    strategy_context = await memory_client.fetch_investing_strategy()
+    bank = await memory_client.fetch_latest_analysis("bank-adviser")
+    financial_context = ""
+    if bank:
+        bank_result = bank.get("result") or {}
+        financial_context = json.dumps(
+            {
+                "saved_at":          bank.get("saved_at"),
+                "yearly_progress":   bank_result.get("yearly_progress"),
+                "investment_signal": bank_result.get("investment_signal"),
+                "budget_next_month": bank_result.get("budget_next_month"),
+            },
+            ensure_ascii=False,
+        )
+    previous = await memory_client.fetch_latest_analysis("investing")
+
+    adviser = InvestmentAdviser(
+        bedrock_client=_get_bedrock_client(settings.aws_region),
+        model_id=settings.bedrock_model_id,
+    )
+    try:
+        raw = adviser.analyse(
+            strategy_context=strategy_context,
+            financial_context=financial_context,
+            previous=previous.get("result") if previous else None,
+        )
+    except Exception as exc:
+        logger.exception("Investment analysis failed")
+        raise HTTPException(status_code=502, detail=f"Analysis failed: {exc}") from exc
+
+    payload = {"saved_at": datetime.now(timezone.utc).isoformat(), "result": raw}
+    try:
+        await memory_client.save_analysis("investing", payload)
+    except Exception:
+        logger.warning("Failed to cache investing analysis in MCP memory", exc_info=True)
+    return payload
+
+
+@app.get("/api/investing/latest")
+async def latest_investing_analysis(settings: SettingsDep, _: str = Depends(require_auth)):
+    memory_client = _make_memory_client(settings)
+    payload = await memory_client.fetch_latest_analysis("investing")
+    if not payload:
+        raise HTTPException(status_code=404, detail="No cached analysis available — run one first.")
+    return payload
+
+
+# ── Day trading desk ───────────────────────────────────────────────────────────
+
+@app.post("/api/trading/analyse")
+async def analyse_day_trading(settings: SettingsDep, _: str = Depends(require_auth)):
+    """Run the daily market analysis (US / Europe / Southeast Asia).
+
+    Fetches a live market snapshot from the web (Yahoo Finance quotes,
+    Bloomberg / Economist / Google News headlines), loads the previous
+    analysis from MCP memory so the model builds on its own open calls, and
+    caches the new result. Returns {saved_at, result, snapshot_meta}.
+    """
+    memory_client = _make_memory_client(settings)
+
+    previous_payload = await memory_client.fetch_latest_analysis("day-trading")
+    previous = previous_payload.get("result") if previous_payload else None
+    watchlist = [
+        rec.get("ticker")
+        for rec in (previous or {}).get("recommendations", [])
+        if rec.get("ticker")
+    ]
+
+    snapshot = await collect_market_snapshot(watchlist)
+    strategy_context = await memory_client.fetch_investing_strategy()
+
+    trader = DayTrader(
+        bedrock_client=_get_bedrock_client(settings.aws_region),
+        model_id=settings.bedrock_model_id,
+    )
+    try:
+        raw = trader.analyse(
+            market_snapshot=snapshot,
+            previous=previous,
+            strategy_context=strategy_context,
+        )
+    except Exception as exc:
+        logger.exception("Day trading analysis failed")
+        raise HTTPException(status_code=502, detail=f"Analysis failed: {exc}") from exc
+
+    payload = {
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "result":   raw,
+        "snapshot_meta": {
+            "fetched_at":     snapshot.get("fetched_at"),
+            "sources_ok":     snapshot.get("sources_ok", []),
+            "sources_failed": snapshot.get("sources_failed", []),
+        },
+    }
+    try:
+        await memory_client.save_analysis("day-trading", payload)
+    except Exception:
+        logger.warning("Failed to cache day-trading analysis in MCP memory", exc_info=True)
+    return payload
+
+
+@app.get("/api/trading/latest")
+async def latest_day_trading_analysis(settings: SettingsDep, _: str = Depends(require_auth)):
+    memory_client = _make_memory_client(settings)
+    payload = await memory_client.fetch_latest_analysis("day-trading")
+    if not payload:
+        raise HTTPException(status_code=404, detail="No cached analysis available — run one first.")
+    return payload

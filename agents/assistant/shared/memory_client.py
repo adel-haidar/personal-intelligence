@@ -1,7 +1,9 @@
 import asyncio
+import json
 import logging
 import ast
 import re
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 import httpx
 
@@ -350,6 +352,86 @@ class MemoryClient(BaseLLMService):
             except Exception:
                 logger.warning("Financial memory search failed for query %r", query, exc_info=True)
         return "\n".join(parts)
+
+    # Semantic queries for Adel's investing strategy (Trading 212 exports,
+    # portfolio notes, watchlists) uploaded to memory.
+    _INVESTING_STRATEGY_QUERIES = [
+        "Trading 212 investing strategy portfolio holdings allocation pies",
+        "Investment strategy stocks ETF portfolio watchlist risk profile",
+    ]
+
+    async def fetch_investing_strategy(self) -> str:
+        """Search memory for Adel's uploaded investing strategy / portfolio notes."""
+        parts: list[str] = []
+        for query in self._INVESTING_STRATEGY_QUERIES:
+            try:
+                result = await self._search(query)
+                if result:
+                    parts.append(result)
+            except Exception:
+                logger.warning(
+                    "Investing strategy search failed for query %r", query, exc_info=True
+                )
+        return "\n".join(parts)
+
+    # ── Agent analysis persistence ────────────────────────────────────────────
+    #
+    # Analyses (bank adviser, investing, day trading) are cached in MCP memory
+    # so the dashboard can load the latest result without re-running the LLM,
+    # and so each new run can build on the previous one.
+
+    _ANALYSIS_TITLE_PREFIX = "agent-analysis"
+
+    async def save_analysis(self, kind: str, payload: dict) -> None:
+        """Persist an analysis result as a JSON memory.
+
+        Args:
+            kind: Analysis family, e.g. 'bank-adviser', 'investing', 'day-trading'.
+            payload: JSON-serialisable result to store.
+        """
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        title = f"{self._ANALYSIS_TITLE_PREFIX}:{kind} {timestamp}"
+        headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        async with httpx.AsyncClient(headers=headers) as http_client:
+            async with streamable_http_client(
+                url=self._server_url, http_client=http_client
+            ) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    await session.call_tool(
+                        "save",
+                        {
+                            "title": title,
+                            "tags": [self._ANALYSIS_TITLE_PREFIX, kind],
+                            "content": json.dumps(payload, ensure_ascii=False),
+                        },
+                    )
+        logger.info("Saved %s analysis to MCP memory as %r", kind, title)
+
+    async def fetch_latest_analysis(self, kind: str) -> dict | None:
+        """Fetch the most recent saved analysis of the given kind, or None."""
+        prefix = f"{self._ANALYSIS_TITLE_PREFIX}:{kind}"
+        try:
+            items = await self._list_memories_api(query=prefix, page_size=100)
+        except Exception:
+            logger.warning("Failed to list %s analyses", kind, exc_info=True)
+            return None
+
+        candidates = [
+            item for item in items
+            if (item.get("title") or "").startswith(prefix)
+        ]
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda m: m.get("created_at", ""))
+        try:
+            return json.loads(latest.get("content") or "")
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "Latest %s analysis %r is not valid JSON — ignoring",
+                kind, latest.get("title"),
+            )
+            return None
 
     async def save_job_run(
         self,
