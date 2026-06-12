@@ -12,6 +12,7 @@ from personal_intelligence.content.creators import list_creators
 from personal_intelligence.database import _connect
 from personal_intelligence.content.jobs.topic_job import run_topic_intelligence_job
 from personal_intelligence.content.jobs.post_job import generate_posts_batch
+from personal_intelligence.content.jobs.video_job import generate_videos_batch
 
 router = APIRouter(prefix="/api/content")
 
@@ -205,3 +206,22 @@ async def run_post_generation_job_endpoint(
         raise HTTPException(status_code=422, detail="count must be between 1 and 10")
     background_tasks.add_task(generate_posts_batch, count)
     return {"status": "enqueued", "job": "post_generation", "count": count}
+
+
+class VideosJobRequest(BaseModel):
+    count: int = 1
+    topic_id: Optional[str] = None
+
+
+@router.post("/jobs/videos/run", status_code=202)
+async def run_video_generation_job_endpoint(
+    background_tasks: BackgroundTasks,
+    body: Optional[VideosJobRequest] = None,
+    _: None = Depends(_require_internal_secret),
+):
+    count = body.count if body else 1
+    topic_id = body.topic_id if body else None
+    if not (1 <= count <= 5):
+        raise HTTPException(status_code=422, detail="count must be between 1 and 5")
+    background_tasks.add_task(generate_videos_batch, count, topic_id)
+    return {"status": "enqueued", "job": "video_generation", "count": count, "topic_id": topic_id}

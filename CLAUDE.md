@@ -42,6 +42,22 @@ personal-intelligence/
 
 ---
 
+## System Dependencies on EC2
+
+The SIGNAL video pipeline (Phase 4) assembles videos with FFmpeg on the EC2 host:
+
+```bash
+# Required system packages (one-time)
+sudo apt install ffmpeg -y
+
+# Verify (ffprobe is used for audio/video duration measurement)
+ffmpeg -version
+```
+
+Required env vars (shared with the PULSE pipeline): `S3_CONTENT_BUCKET`, `CLOUDFRONT_BASE_URL`, `INTERNAL_SECRET`.
+
+---
+
 ## Key URLs
 - Production: https://adel-intelligence.com
 - Dashboard: https://adel-intelligence.com (or subdomain — adjust as needed)

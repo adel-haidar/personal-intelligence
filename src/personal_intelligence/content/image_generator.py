@@ -50,7 +50,13 @@ class PostImageGenerator:
         )
         return text.strip()
 
-    async def _invoke_nova_canvas(self, image_prompt: str) -> bytes:
+    async def _invoke_nova_canvas(
+        self,
+        image_prompt: str,
+        width: int = 1024,
+        height: int = 1024,
+        negative_text: str = "text, watermark, logo, blurry, low quality",
+    ) -> bytes:
         settings = get_settings()
         region = os.getenv("BEDROCK_IMAGE_REGION", _DEFAULT_IMAGE_REGION) or settings.aws_region
         model_id = os.getenv("NOVA_CANVAS_MODEL_ID", "amazon.nova-canvas-v1:0")
@@ -59,12 +65,12 @@ class PostImageGenerator:
             "taskType": "TEXT_IMAGE",
             "textToImageParams": {
                 "text": image_prompt,
-                "negativeText": "text, watermark, logo, blurry, low quality",
+                "negativeText": negative_text,
             },
             "imageGenerationConfig": {
                 "numberOfImages": 1,
-                "height": 1024,
-                "width": 1024,
+                "height": height,
+                "width": width,
                 "quality": "standard",  # standard, not premium, to save cost
             },
         }
