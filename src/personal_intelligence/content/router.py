@@ -1,14 +1,16 @@
 import uuid
+import os
 from datetime import datetime
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks, Header
 from pydantic import BaseModel
 from psycopg2.extras import RealDictCursor
 
 from personal_intelligence.auth.oauth import validate_token
 from personal_intelligence.content.creators import list_creators
 from personal_intelligence.database import _connect
+from personal_intelligence.content.jobs.topic_job import run_topic_intelligence_job
 
 router = APIRouter(prefix="/api/content")
 
@@ -163,3 +165,24 @@ async def get_topics(
     conn.close()
     pages = max(1, (total + page_size - 1) // page_size)
     return {"items": rows, "total": total, "page": page, "pages": pages}
+
+
+@router.post("/jobs/topics/run", status_code=202)
+async def run_topic_intelligence_job_endpoint(
+    background_tasks: BackgroundTasks,
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
+):
+    expected_secret = os.getenv("INTERNAL_SECRET")
+    if not expected_secret:
+        raise HTTPException(
+            status_code=500,
+            detail="INTERNAL_SECRET env var is not configured on the server"
+        )
+    if x_internal_secret != expected_secret:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid internal secret"
+        )
+    
+    background_tasks.add_task(run_topic_intelligence_job)
+    return {"status": "enqueued", "job": "topic_intelligence"}
