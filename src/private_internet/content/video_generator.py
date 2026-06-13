@@ -117,26 +117,121 @@ class VideoScriptGenerator:
         )
 
 
+def _fallback_slide(width: int, height: int, title: str, subtitle: str = "") -> bytes:
+    """Render a calm gradient title-slide as PNG bytes.
+
+    Used when no Bedrock image-generation model is available (every Amazon
+    text-to-image model is retired and no Stability text-to-image model is
+    invokable) so SIGNAL videos still render. Real AI images return
+    automatically the moment a generator is configured. PIL is imported lazily
+    so the module still imports on hosts without Pillow."""
+    from io import BytesIO
+    from PIL import Image, ImageDraw, ImageFont
+
+    # vertical gradient: indigo-slate -> near-black (the Calm Intelligence palette)
+    top, bottom = (28, 27, 46), (12, 12, 20)
+    column = Image.new("RGB", (1, height))
+    for y in range(height):
+        t = y / max(1, height - 1)
+        column.putpixel((0, y), tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3)))
+    img = column.resize((width, height))
+    draw = ImageDraw.Draw(img)
+
+    def _font(size: int, bold: bool = True):
+        name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+        for path in (
+            f"/usr/share/fonts/truetype/dejavu/{name}",  # Debian/Ubuntu
+            f"/usr/share/fonts/TTF/{name}",              # Arch
+            f"/usr/share/fonts/dejavu/{name}",           # Fedora
+            name,
+        ):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        try:
+            return ImageFont.load_default(size=size)  # Pillow >= 10.1 scalable default
+        except TypeError:
+            return ImageFont.load_default()
+
+    title_font = _font(int(height * 0.075), bold=True)
+    sub_font = _font(int(height * 0.035), bold=False)
+
+    # word-wrap the title to ~80% of the slide width (max 4 lines)
+    max_w = int(width * 0.8)
+    lines, current = [], ""
+    for word in (title or "").split():
+        trial = f"{current} {word}".strip()
+        if draw.textlength(trial, font=title_font) <= max_w:
+            current = trial
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    lines = lines[:4] or [" "]
+
+    line_h = int(height * 0.10)
+    block_top = (height - line_h * len(lines)) // 2 - int(height * 0.03)
+    y = block_top
+    for line in lines:
+        w_line = draw.textlength(line, font=title_font)
+        draw.text(((width - w_line) / 2, y), line, font=title_font, fill=(228, 228, 240))
+        y += line_h
+
+    # amber accent dot + creator subtitle
+    cx = width // 2
+    draw.ellipse([cx - 5, y + 14, cx + 5, y + 24], fill=(232, 164, 68))
+    if subtitle:
+        w_sub = draw.textlength(subtitle, font=sub_font)
+        draw.text(((width - w_sub) / 2, y + 36), subtitle, font=sub_font, fill=(232, 164, 68))
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 class VideoImageGenerator(PostImageGenerator):
-    """Reuses the Nova Canvas invoker from PostImageGenerator with 16:9 video sizing."""
+    """Reuses the Nova Canvas invoker from PostImageGenerator with 16:9 video sizing.
+
+    When no image-generation model is reachable, each slide falls back to a
+    rendered gradient title-slide so the video still assembles."""
 
     NEGATIVE_TEXT = "text, watermark, logo, people's faces, blurry"
 
-    async def generate_for_section(self, section: ScriptSection, creator: dict) -> bytes:
+    async def generate_for_section(
+        self, section: ScriptSection, creator: dict, title: str = ""
+    ) -> bytes:
         prompt = section.image_prompt + " cinematic, 16:9, dark editorial style, no text"
-        return await self._invoke_nova_canvas(
-            prompt,
-            width=VIDEO_WIDTH,
-            height=VIDEO_HEIGHT,
-            negative_text=self.NEGATIVE_TEXT,
-        )
+        try:
+            return await self._invoke_nova_canvas(
+                prompt,
+                width=VIDEO_WIDTH,
+                height=VIDEO_HEIGHT,
+                negative_text=self.NEGATIVE_TEXT,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Slide image generation failed ({type(exc).__name__}); "
+                "using gradient fallback slide."
+            )
+            caption = title or section.text[:60]
+            return _fallback_slide(VIDEO_WIDTH, VIDEO_HEIGHT, caption, creator.get("name", ""))
 
     async def generate_thumbnail(self, script: VideoScript, creator: dict) -> bytes:
         intro = script.sections[0]
         prompt = intro.image_prompt + " bold title overlay style, high contrast"
-        return await self._invoke_nova_canvas(
-            prompt,
-            width=VIDEO_WIDTH,
-            height=VIDEO_HEIGHT,
-            negative_text=self.NEGATIVE_TEXT,
-        )
+        try:
+            return await self._invoke_nova_canvas(
+                prompt,
+                width=VIDEO_WIDTH,
+                height=VIDEO_HEIGHT,
+                negative_text=self.NEGATIVE_TEXT,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Thumbnail generation failed ({type(exc).__name__}); "
+                "using gradient fallback slide."
+            )
+            return _fallback_slide(VIDEO_WIDTH, VIDEO_HEIGHT, script.title, creator.get("name", ""))
