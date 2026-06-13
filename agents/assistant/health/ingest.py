@@ -104,8 +104,7 @@ def parse_apple_health_export(xml_bytes: bytes) -> list[HealthMetric]:
     daily_energy_source: dict[str, str] = {}
     daily_sleep_source: dict[str, str] = {}
 
-    context = ET.iterparse(None, events=("start",))
-    # Feed bytes directly
+    # Stream-parse straight from the in-memory export bytes.
     import io
     context = ET.iterparse(io.BytesIO(xml_bytes), events=("start",))
 
