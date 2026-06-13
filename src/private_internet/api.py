@@ -7,6 +7,7 @@ from private_internet.auth.routes import router as auth_router
 from private_internet.content.creators import seed_default_creators
 from private_internet.content.db import init_content_db
 from private_internet.content.router import router as content_router
+from private_internet.core.tenancy import migrate_multi_tenancy
 from private_internet.memory.mcp_server import mcp
 from private_internet.memory.routes import router as memory_router
 from private_internet.memory.service import init_db
@@ -23,6 +24,9 @@ async def lifespan(app: FastAPI):
     init_db()
     init_content_db()
     seed_default_creators()
+    # Add user_id to every user-data table + seed the admin account. Runs after
+    # the base tables exist so the ALTER ... ADD COLUMN statements can find them.
+    migrate_multi_tenancy()
     async with mcp.session_manager.run():
         yield
 

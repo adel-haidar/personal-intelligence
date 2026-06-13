@@ -39,20 +39,23 @@ class ContentTopic:
 
 
 class MCPMemoryReader:
-    async def fetch_recent_memories(self, limit: int = 20) -> List[dict]:
+    async def fetch_recent_memories(self, limit: int = 20, *, user_id: str) -> List[dict]:
         """
-        Call local memory service to retrieve the most recent memories.
+        Retrieve the most recent memories for one user.  # MUST SCOPE BY USER
         Returns list of memory dicts:
         { "id": str, "title": str, "content": str, "tags": list[str], "created_at": str }
         """
+        assert user_id is not None, "user_id must be set before any content operation"
         loop = asyncio.get_event_loop()
         try:
             items, _ = await loop.run_in_executor(
-                None, lambda: list_memories(page=1, page_size=limit)
+                None, lambda: list_memories(page=1, page_size=limit, user_id=user_id)
             )
             return items
         except Exception as e:
-            logger.error(f"Failed to fetch recent memories from local service: {e}", exc_info=True)
+            logger.error(
+                f"[user:{user_id[:8]}] Failed to fetch recent memories: {e}", exc_info=True
+            )
             return []
 
     async def extract_topic_candidates(self, memories: List[dict]) -> List[TopicCandidate]:
@@ -147,17 +150,19 @@ class MCPMemoryReader:
 
 
 class TopicStorageService:
-    def is_duplicate(self, db, slug: str, threshold_days: int = 14) -> bool:
+    def is_duplicate(self, db, slug: str, threshold_days: int = 14, *, user_id: str) -> bool:
         """
-        Return True if a topic with this slug was already created in the last threshold_days.
-        Prevents re-generating the same topic repeatedly.
+        Return True if this user already created a topic with this slug in the
+        last threshold_days. Prevents re-generating the same topic repeatedly.
         """
+        assert user_id is not None, "user_id must be set before any content operation"
         cur = db.cursor()
         try:
             cur.execute(
-                """SELECT 1 FROM content_topics 
-                   WHERE slug = %s AND created_at >= %s - INTERVAL '%s days'""",
-                (slug, datetime.now(timezone.utc), threshold_days)
+                """SELECT 1 FROM content_topics
+                   WHERE user_id = %s AND slug = %s
+                     AND created_at >= %s - INTERVAL '%s days'""",
+                (user_id, slug, datetime.now(timezone.utc), threshold_days)
             )
             exists = cur.fetchone() is not None
             return exists
@@ -167,15 +172,20 @@ class TopicStorageService:
         finally:
             cur.close()
 
-    def save_topic(self, db, candidate: TopicCandidate, research: list, weight: float) -> ContentTopic:
+    def save_topic(self, db, candidate: TopicCandidate, research: list, weight: float,
+                   *, user_id: str) -> ContentTopic:
         """
-        Insert into content_topics and content_research.
+        Insert into content_topics and content_research for one user.
         If duplicate: update weight and append new research links only.
         """
+        assert user_id is not None, "user_id must be set before any content operation"
         cur = db.cursor(cursor_factory=RealDictCursor)
         try:
-            # Check if topic already exists by slug
-            cur.execute("SELECT * FROM content_topics WHERE slug = %s", (candidate.slug,))
+            # Check if this user already has the topic (slugs are unique per user)
+            cur.execute(
+                "SELECT * FROM content_topics WHERE user_id = %s AND slug = %s",
+                (user_id, candidate.slug),
+            )
             row = cur.fetchone()
 
             if row:
@@ -195,9 +205,9 @@ class TopicStorageService:
                     if cur.fetchone() is None:
                         research_id = str(uuid.uuid4())
                         cur.execute(
-                            """INSERT INTO content_research (id, topic_id, url, title, summary)
-                               VALUES (%s, %s, %s, %s, %s)""",
-                            (research_id, topic_id, res.url, res.title, res.summary)
+                            """INSERT INTO content_research (id, topic_id, url, title, summary, user_id)
+                               VALUES (%s, %s, %s, %s, %s, %s)""",
+                            (research_id, topic_id, res.url, res.title, res.summary, user_id)
                         )
                 db.commit()
                 
@@ -222,17 +232,17 @@ class TopicStorageService:
                 created_at = datetime.now(timezone.utc)
                 
                 cur.execute(
-                    """INSERT INTO content_topics (id, name, slug, source, source_ref, keywords, weight, used_count, last_used_at, created_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (topic_id, candidate.name, candidate.slug, candidate.source, candidate.source_ref, candidate.keywords, weight, 0, None, created_at)
+                    """INSERT INTO content_topics (id, name, slug, source, source_ref, keywords, weight, used_count, last_used_at, created_at, user_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (topic_id, candidate.name, candidate.slug, candidate.source, candidate.source_ref, candidate.keywords, weight, 0, None, created_at, user_id)
                 )
 
                 for res in research:
                     research_id = str(uuid.uuid4())
                     cur.execute(
-                        """INSERT INTO content_research (id, topic_id, url, title, summary)
-                           VALUES (%s, %s, %s, %s, %s)""",
-                        (research_id, topic_id, res.url, res.title, res.summary)
+                        """INSERT INTO content_research (id, topic_id, url, title, summary, user_id)
+                           VALUES (%s, %s, %s, %s, %s, %s)""",
+                        (research_id, topic_id, res.url, res.title, res.summary, user_id)
                     )
                 db.commit()
 

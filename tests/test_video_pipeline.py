@@ -336,7 +336,7 @@ class TestGenerateVideo:
             for p in patches:
                 p.start()
             try:
-                video_id = await generate_video()
+                video_id = await generate_video(user_id="u1")
             finally:
                 for p in patches:
                     p.stop()
@@ -374,7 +374,7 @@ class TestGenerateVideo:
                 p.start()
             try:
                 with pytest.raises(RuntimeError, match="LLM exploded"):
-                    await generate_video()
+                    await generate_video(user_id="u1")
             finally:
                 for p in patches:
                     p.stop()
@@ -388,7 +388,7 @@ class TestGenerateVideo:
     async def test_batch_runs_sequentially_and_counts_failures(self):
         calls = []
 
-        async def fake_generate(topic_id=None):
+        async def fake_generate(topic_id=None, *, user_id):
             calls.append(topic_id)
             if len(calls) == 2:
                 raise RuntimeError("second one fails")
@@ -398,7 +398,7 @@ class TestGenerateVideo:
             "private_internet.content.jobs.video_job.generate_video",
             side_effect=fake_generate,
         ):
-            result = await generate_videos_batch(count=3)
+            result = await generate_videos_batch(count=3, user_id="u1")
 
         assert result == {"created": ["video-1", "video-3"], "failed": 1}
 
@@ -408,8 +408,8 @@ class TestGenerateVideo:
         with patch(
             "private_internet.content.jobs.video_job.generate_video", new=mock_gen
         ):
-            result = await generate_videos_batch(count=3, topic_id="t-1")
+            result = await generate_videos_batch(count=3, topic_id="t-1", user_id="u1")
 
         assert mock_gen.call_count == 1
-        assert mock_gen.call_args == call("t-1")
+        assert mock_gen.call_args == call("t-1", user_id="u1")
         assert result["created"] == ["video-1"]

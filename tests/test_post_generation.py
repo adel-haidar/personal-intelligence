@@ -230,7 +230,7 @@ class TestGeneratePostsBatch:
              patch("private_internet.content.jobs.post_job.PostTextGenerator", return_value=mock_text_gen), \
              patch("private_internet.content.jobs.post_job.PostImageGenerator", return_value=mock_image_gen), \
              patch("private_internet.content.jobs.post_job.AssetStore", return_value=mock_store):
-            result = await generate_posts_batch(count=1)
+            result = await generate_posts_batch(count=1, user_id="u1")
 
         assert result["created"] == 1
         assert result["failed"] == 0
@@ -268,7 +268,7 @@ class TestGeneratePostsBatch:
              patch("private_internet.content.jobs.post_job.PostTextGenerator", return_value=mock_text_gen), \
              patch("private_internet.content.jobs.post_job.PostImageGenerator", return_value=mock_image_gen), \
              patch("private_internet.content.jobs.post_job.AssetStore", return_value=MagicMock()):
-            result = await generate_posts_batch(count=1)
+            result = await generate_posts_batch(count=1, user_id="u1")
 
         assert result["created"] == 1
         insert_calls = [c for c in cursor.execute.call_args_list if "INSERT INTO content_posts" in c.args[0]]
@@ -284,6 +284,6 @@ class TestGeneratePostsBatch:
 
         with patch("private_internet.content.jobs.post_job._connect", return_value=conn), \
              patch("private_internet.content.jobs.post_job.AssetStore", return_value=MagicMock()):
-            result = await generate_posts_batch(count=3)
+            result = await generate_posts_batch(count=3, user_id="u1")
 
         assert result == {"created": 0, "failed": 0}

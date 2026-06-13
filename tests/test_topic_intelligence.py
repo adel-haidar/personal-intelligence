@@ -38,7 +38,7 @@ class TestMCPMemoryReader:
         ]
         
         with patch("private_internet.content.topic_intelligence.list_memories", return_value=(mock_memories, 2)):
-            result = await reader.fetch_recent_memories(limit=2)
+            result = await reader.fetch_recent_memories(limit=2, user_id="u1")
             
         assert len(result) == 2
         assert result[0]["id"] == "m1"
@@ -177,7 +177,7 @@ class TestTopicStorageService:
         storage = TopicStorageService()
         mock_db = _mock_conn(fetchone_val=(1,))
         
-        result = storage.is_duplicate(mock_db, "test-slug")
+        result = storage.is_duplicate(mock_db, "test-slug", user_id="u1")
         assert result is True
         mock_db.cursor().execute.assert_called_once()
 
@@ -185,7 +185,7 @@ class TestTopicStorageService:
         storage = TopicStorageService()
         mock_db = _mock_conn(fetchone_val=None)
         
-        result = storage.is_duplicate(mock_db, "test-slug")
+        result = storage.is_duplicate(mock_db, "test-slug", user_id="u1")
         assert result is False
 
     def test_save_topic_new(self):
@@ -195,7 +195,7 @@ class TestTopicStorageService:
         candidate = TopicCandidate("AWS prep", "aws-prep", ["aws"], "mcp_memory", "m1")
         research = [ResearchResult("https://aws.amazon.com", "AWS", "AWS Study Guide")]
         
-        result = storage.save_topic(mock_db, candidate, research, 0.75)
+        result = storage.save_topic(mock_db, candidate, research, 0.75, user_id="u1")
         
         assert isinstance(result, ContentTopic)
         assert result.name == "AWS prep"
@@ -228,7 +228,7 @@ class TestTopicStorageService:
         candidate = TopicCandidate("AWS prep", "aws-prep", ["aws"], "mcp_memory", "m1")
         research = [ResearchResult("https://aws.amazon.com", "AWS", "AWS Study Guide")]
         
-        result = storage.save_topic(mock_db, candidate, research, 0.9)
+        result = storage.save_topic(mock_db, candidate, research, 0.9, user_id="u1")
         
         assert isinstance(result, ContentTopic)
         assert result.id == "existing-id"
@@ -263,7 +263,7 @@ class TestJobOrchestration:
             patch("private_internet.content.jobs.topic_job.TopicStorageService", return_value=mock_storage),
             patch("private_internet.content.jobs.topic_job._connect", return_value=MagicMock())
         ):
-            await run_topic_intelligence_job()
+            await run_topic_intelligence_job(user_id="u1")
             
         mock_reader.fetch_recent_memories.assert_called_once()
         mock_reader.extract_topic_candidates.assert_called_once()

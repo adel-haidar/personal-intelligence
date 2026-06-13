@@ -7,9 +7,11 @@ from private_internet.content.research_service import WebResearchService
 logger = logging.getLogger(__name__)
 
 
-async def run_topic_intelligence_job():
+async def run_topic_intelligence_job(*, user_id: str):
     """
-    Full pipeline:
+    Full pipeline for a single user — every read and write is user-scoped.
+    # MUST SCOPE BY USER
+
     1. MCPMemoryReader.fetch_recent_memories()
     2. MCPMemoryReader.extract_topic_candidates()
     3. For each candidate (parallel with asyncio.gather):
@@ -19,15 +21,16 @@ async def run_topic_intelligence_job():
        d. TopicStorageService.save_topic()
     4. Log summary: N topics added, N skipped (duplicate), N failed
     """
-    logger.info("Starting run_topic_intelligence_job")
-    
+    assert user_id is not None, "user_id must be set before any content operation"
+    logger.info(f"[user:{user_id[:8]}] Starting run_topic_intelligence_job")
+
     reader = MCPMemoryReader()
     research_service = WebResearchService()
     storage_service = TopicStorageService()
 
     # 1. Fetch recent memories
     try:
-        memories = await reader.fetch_recent_memories(limit=20)
+        memories = await reader.fetch_recent_memories(limit=20, user_id=user_id)
         logger.info(f"Fetched {len(memories)} recent memories from memory store.")
     except Exception as e:
         logger.error(f"Failed to fetch recent memories: {e}", exc_info=True)
@@ -63,7 +66,7 @@ async def run_topic_intelligence_job():
             conn = _connect()
             
             # Check for duplication (14 days threshold)
-            is_dup = storage_service.is_duplicate(conn, candidate.slug, threshold_days=14)
+            is_dup = storage_service.is_duplicate(conn, candidate.slug, threshold_days=14, user_id=user_id)
             if is_dup:
                 logger.info(f"Skipping topic candidate '{candidate.name}' - duplicate detected in the last 14 days.")
                 skipped += 1
@@ -80,7 +83,7 @@ async def run_topic_intelligence_job():
             weight = await research_service.assess_topic_relevance(candidate, research_results)
 
             # Store the topic and research links
-            storage_service.save_topic(conn, candidate, research_results, weight)
+            storage_service.save_topic(conn, candidate, research_results, weight, user_id=user_id)
             logger.info(f"Successfully added/updated topic '{candidate.name}' with weight {weight:.2f}")
             added += 1
 

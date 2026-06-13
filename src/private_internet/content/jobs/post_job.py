@@ -15,8 +15,11 @@ from private_internet.content.asset_store import AssetStore
 logger = logging.getLogger(__name__)
 
 
-async def generate_posts_batch(count: int = 3) -> dict:
+async def generate_posts_batch(count: int = 3, *, user_id: str) -> dict:
     """
+    Generate posts for a single user from that user's own topics.
+    # MUST SCOPE BY USER
+
     1. Query content_topics ordered by weight DESC, last_used_at ASC NULLS FIRST
        (prefer untouched high-weight topics)
     2. For each topic: select creator + tone, generate text + image,
@@ -25,7 +28,8 @@ async def generate_posts_batch(count: int = 3) -> dict:
 
     Image failure is non-fatal: the post is still created with image_url=NULL.
     """
-    logger.info(f"Starting generate_posts_batch (count={count})")
+    assert user_id is not None, "user_id must be set before any content operation"
+    logger.info(f"[user:{user_id[:8]}] Starting generate_posts_batch (count={count})")
 
     selector = CreatorSelector()
     text_generator = PostTextGenerator()
@@ -42,9 +46,10 @@ async def generate_posts_batch(count: int = 3) -> dict:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             """SELECT * FROM content_topics
+               WHERE user_id = %s
                ORDER BY weight DESC, last_used_at ASC NULLS FIRST
                LIMIT %s""",
-            (count,),
+            (user_id, count),
         )
         topics = [dict(r) for r in cur.fetchall()]
         cur.close()
@@ -63,8 +68,9 @@ async def generate_posts_batch(count: int = 3) -> dict:
                 cur = conn.cursor(cursor_factory=RealDictCursor)
                 cur.execute(
                     """SELECT * FROM content_research
-                       WHERE topic_id = %s ORDER BY fetched_at DESC LIMIT 5""",
-                    (topic["id"],),
+                       WHERE user_id = %s AND topic_id = %s
+                       ORDER BY fetched_at DESC LIMIT 5""",
+                    (user_id, topic["id"]),
                 )
                 research = [dict(r) for r in cur.fetchall()]
                 cur.close()
@@ -94,17 +100,18 @@ async def generate_posts_batch(count: int = 3) -> dict:
                 cur = conn.cursor()
                 cur.execute(
                     """INSERT INTO content_posts
-                       (id, creator_id, topic_id, body, image_url, image_prompt, tone)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                    (post_id, creator["id"], topic["id"], post.body, image_url, image_prompt, tone),
+                       (id, creator_id, topic_id, body, image_url, image_prompt, tone, user_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (post_id, creator["id"], topic["id"], post.body, image_url, image_prompt,
+                     tone, user_id),
                 )
 
                 # g. Bump topic usage
                 cur.execute(
                     """UPDATE content_topics
                        SET used_count = used_count + 1, last_used_at = %s
-                       WHERE id = %s""",
-                    (datetime.now(timezone.utc), topic["id"]),
+                       WHERE id = %s AND user_id = %s""",
+                    (datetime.now(timezone.utc), topic["id"], user_id),
                 )
                 conn.commit()
                 cur.close()

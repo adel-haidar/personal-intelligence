@@ -19,22 +19,28 @@ from private_internet.content.asset_store import AssetStore
 logger = logging.getLogger(__name__)
 
 
-def _select_topic(conn, topic_id: str | None) -> dict:
-    """By id if given, else highest-weight topic without a video in the last 7 days."""
+def _select_topic(conn, topic_id: str | None, *, user_id: str) -> dict:
+    """By id if given, else highest-weight topic without a video in the last 7 days.
+    Always scoped to the user's own topics.  # MUST SCOPE BY USER"""
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
         if topic_id:
-            cur.execute("SELECT * FROM content_topics WHERE id = %s", (topic_id,))
+            cur.execute(
+                "SELECT * FROM content_topics WHERE id = %s AND user_id = %s",
+                (topic_id, user_id),
+            )
         else:
             cur.execute(
                 """SELECT t.* FROM content_topics t
-                   WHERE NOT EXISTS (
+                   WHERE t.user_id = %s
+                     AND NOT EXISTS (
                        SELECT 1 FROM content_videos v
                        WHERE v.topic_id = t.id
                          AND v.created_at >= now() - INTERVAL '7 days'
                    )
                    ORDER BY t.weight DESC, t.last_used_at ASC NULLS FIRST
-                   LIMIT 1"""
+                   LIMIT 1""",
+                (user_id,),
             )
         row = cur.fetchone()
         if row is None:
@@ -46,27 +52,30 @@ def _select_topic(conn, topic_id: str | None) -> dict:
         cur.close()
 
 
-def _fetch_research(conn, topic_id: str) -> list[dict]:
+def _fetch_research(conn, topic_id: str, *, user_id: str) -> list[dict]:
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
         cur.execute(
             """SELECT * FROM content_research
-               WHERE topic_id = %s ORDER BY fetched_at DESC LIMIT 5""",
-            (topic_id,),
+               WHERE user_id = %s AND topic_id = %s
+               ORDER BY fetched_at DESC LIMIT 5""",
+            (user_id, topic_id),
         )
         return [dict(r) for r in cur.fetchall()]
     finally:
         cur.close()
 
 
-async def generate_video(topic_id: str | None = None) -> str:
+async def generate_video(topic_id: str | None = None, *, user_id: str) -> str:
     """
-    Full SIGNAL pipeline: script → 5 slide images → Polly narration →
-    FFmpeg assembly → S3/CloudFront. Returns the video_id.
+    Full SIGNAL pipeline for a single user: script → 5 slide images →
+    Polly narration → FFmpeg assembly → S3/CloudFront. Returns the video_id.
+    # MUST SCOPE BY USER
 
     On failure the content_videos row is set to status='failed' and the
     exception is re-raised. /tmp/{video_id} is cleaned up either way.
     """
+    assert user_id is not None, "user_id must be set before any content operation"
     script_generator = VideoScriptGenerator()
     image_generator = VideoImageGenerator()
     polly = PollyEngine()
@@ -79,9 +88,9 @@ async def generate_video(topic_id: str | None = None) -> str:
 
     try:
         # 1. Select topic + 2. creator
-        topic = _select_topic(conn, topic_id)
+        topic = _select_topic(conn, topic_id, user_id=user_id)
         creator = CreatorSelector().select_for_topic(conn, topic)
-        research = _fetch_research(conn, topic["id"])
+        research = _fetch_research(conn, topic["id"], user_id=user_id)
         logger.info(
             f"Generating video {video_id} — topic='{topic['name']}', creator='{creator['slug']}'"
         )
@@ -90,9 +99,9 @@ async def generate_video(topic_id: str | None = None) -> str:
         cur = conn.cursor()
         cur.execute(
             """INSERT INTO content_videos
-               (id, creator_id, topic_id, title, script, status)
-               VALUES (%s, %s, %s, %s, %s, 'processing')""",
-            (video_id, creator["id"], topic["id"], topic["name"], ""),
+               (id, creator_id, topic_id, title, script, status, user_id)
+               VALUES (%s, %s, %s, %s, %s, 'processing', %s)""",
+            (video_id, creator["id"], topic["id"], topic["name"], "", user_id),
         )
         conn.commit()
         cur.close()
@@ -147,7 +156,7 @@ async def generate_video(topic_id: str | None = None) -> str:
             """UPDATE content_videos
                SET status = 'ready', title = %s, description = %s, script = %s,
                    video_url = %s, thumbnail_url = %s, duration_seconds = %s
-               WHERE id = %s""",
+               WHERE id = %s AND user_id = %s""",
             (
                 script.title,
                 script.description,
@@ -156,13 +165,14 @@ async def generate_video(topic_id: str | None = None) -> str:
                 thumbnail_url,
                 duration_seconds,
                 video_id,
+                user_id,
             ),
         )
         cur.execute(
             """UPDATE content_topics
                SET used_count = used_count + 1, last_used_at = %s
-               WHERE id = %s""",
-            (datetime.now(timezone.utc), topic["id"]),
+               WHERE id = %s AND user_id = %s""",
+            (datetime.now(timezone.utc), topic["id"], user_id),
         )
         conn.commit()
         cur.close()
@@ -192,18 +202,20 @@ async def generate_video(topic_id: str | None = None) -> str:
         conn.close()
 
 
-async def generate_videos_batch(count: int = 2, topic_id: str | None = None) -> dict:
+async def generate_videos_batch(count: int = 2, topic_id: str | None = None, *, user_id: str) -> dict:
     """
     Run generate_video() `count` times sequentially (not parallel — FFmpeg is
-    CPU-bound). A pinned topic_id only makes sense for a single video.
+    CPU-bound) for a single user. A pinned topic_id only makes sense for a
+    single video.  # MUST SCOPE BY USER
     """
+    assert user_id is not None, "user_id must be set before any content operation"
     if topic_id:
         count = 1
     created = []
     failed = 0
     for _ in range(count):
         try:
-            created.append(await generate_video(topic_id))
+            created.append(await generate_video(topic_id, user_id=user_id))
         except Exception:
             failed += 1
     logger.info(

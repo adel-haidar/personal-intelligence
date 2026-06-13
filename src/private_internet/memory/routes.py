@@ -3,12 +3,13 @@ import io
 import datetime
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from private_internet.auth.oauth import validate_token
 from private_internet.config import get_settings
+from private_internet.core.request_context import RequestContext, get_request_context
 from private_internet.memory.service import (
+    count_memories,
     delete_memory,
     list_memories,
     save_memory,
@@ -17,16 +18,8 @@ from private_internet.memory.service import (
 
 router = APIRouter(prefix="/api")
 
-
-async def require_auth(request: Request) -> str:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="missing token")
-    token = auth[7:]
-    client_id = validate_token(token)
-    if not client_id:
-        raise HTTPException(status_code=401, detail="invalid token")
-    return client_id
+# All endpoints below operate on the authenticated user's brain only.
+# MUST SCOPE BY USER
 
 
 class SaveTextRequest(BaseModel):
@@ -45,9 +38,11 @@ class UpdateMemoryRequest(BaseModel):
 @router.post("/memory/text")
 async def save_text_memory(
     body: SaveTextRequest,
-    client_id: str = Depends(require_auth),
+    ctx: RequestContext = Depends(get_request_context),
 ):
-    memory = save_memory(title=body.title, content=body.content, tags=body.tags)
+    memory = save_memory(
+        title=body.title, content=body.content, tags=body.tags, user_id=ctx.user_id
+    )
     return {"memory_id": memory.memory_id}
 
 
@@ -56,18 +51,28 @@ async def list_memory(
     page: int = 1,
     page_size: int = 20,
     q: str | None = None,
-    client_id: str = Depends(require_auth),
+    ctx: RequestContext = Depends(get_request_context),
 ):
-    items, total = list_memories(page=page, page_size=page_size, query=q)
+    items, total = list_memories(page=page, page_size=page_size, query=q, user_id=ctx.user_id)
     pages = max(1, (total + page_size - 1) // page_size)
     return {"items": items, "total": total, "page": page, "pages": pages}
+
+
+@router.get("/memory/stats")
+async def memory_stats(ctx: RequestContext = Depends(get_request_context)):
+    """Brain size + freshness — powers the dashboard and memory-impact panel."""
+    total, last = count_memories(user_id=ctx.user_id)
+    return {
+        "total": total,
+        "last_updated": last.isoformat() if last else None,
+    }
 
 
 @router.patch("/memory/{memory_id}")
 async def update_memory_endpoint(
     memory_id: str,
     body: UpdateMemoryRequest,
-    client_id: str = Depends(require_auth),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     memory = update_memory(
         memory_id,
@@ -75,6 +80,7 @@ async def update_memory_endpoint(
         content=body.content,
         tags=body.tags,
         append_content=body.append_content,
+        user_id=ctx.user_id,
     )
     if memory is None:
         raise HTTPException(status_code=404, detail="memory not found")
@@ -90,9 +96,9 @@ async def update_memory_endpoint(
 @router.delete("/memory/{memory_id}")
 async def delete_memory_endpoint(
     memory_id: str,
-    client_id: str = Depends(require_auth),
+    ctx: RequestContext = Depends(get_request_context),
 ):
-    deleted = delete_memory(memory_id)
+    deleted = delete_memory(memory_id, user_id=ctx.user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="memory not found")
     return {"deleted": True, "memory_id": memory_id}
@@ -124,8 +130,11 @@ def _chunk_text(text: str) -> list[str]:
 
 
 @router.post("/file")
-async def upload_file(file: UploadFile, client_id: str = Depends(require_auth)):
-    upload_dir = get_settings().upload_dir
+async def upload_file(
+    file: UploadFile,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    upload_dir = os.path.join(get_settings().upload_dir, ctx.user_id)
     os.makedirs(upload_dir, exist_ok=True)
 
     content = await file.read()
@@ -150,7 +159,9 @@ async def upload_file(file: UploadFile, client_id: str = Depends(require_auth)):
         first_saved = None
         for i, chunk in enumerate(chunks):
             title = file.filename if total == 1 else f"{file.filename} ({i + 1}/{total})"
-            saved = save_memory(title=title, content=chunk, tags=["file-upload", "pdf"])
+            saved = save_memory(
+                title=title, content=chunk, tags=["file-upload", "pdf"], user_id=ctx.user_id
+            )
             if first_saved is None:
                 first_saved = saved
     else:
@@ -162,6 +173,7 @@ async def upload_file(file: UploadFile, client_id: str = Depends(require_auth)):
                 f"Hash: {file_hash}."
             ),
             tags=["file-upload", ext],
+            user_id=ctx.user_id,
         )
 
     return {

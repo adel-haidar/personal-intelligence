@@ -9,6 +9,10 @@ from psycopg2.extras import RealDictCursor
 from private_internet.config import get_settings
 from private_internet.database import _connect
 
+# Every function in this module is tenant-scoped. # MUST SCOPE BY USER
+# user_id is required; callers resolve it from RequestContext (API) or the
+# seed admin (MCP server, legacy clients).
+
 
 @dataclass
 class Memory:
@@ -50,12 +54,20 @@ def init_db() -> None:
         )
     """)
     cur.execute("ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ")
+    # user_id column + backfill is handled by core/tenancy.py at startup.
     conn.commit()
     cur.close()
     conn.close()
 
 
-def save_memory(title: str, content: str, tags: list[str] | None = None) -> Memory:
+def save_memory(
+    title: str,
+    content: str,
+    tags: list[str] | None = None,
+    *,
+    user_id: str,
+) -> Memory:
+    assert user_id is not None, "user_id must be set before any memory operation"
     memory_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc)
     tags = tags or []
@@ -66,9 +78,9 @@ def save_memory(title: str, content: str, tags: list[str] | None = None) -> Memo
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO memories (memory_id, title, content, tags, created_at, embedding)
-           VALUES (%s, %s, %s, %s, %s, %s)""",
-        (memory_id, title, content, ",".join(tags), created_at, embedded_str),
+        """INSERT INTO memories (memory_id, title, content, tags, created_at, embedding, user_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (memory_id, title, content, ",".join(tags), created_at, embedded_str, user_id),
     )
     conn.commit()
     cur.close()
@@ -83,10 +95,14 @@ def save_memory(title: str, content: str, tags: list[str] | None = None) -> Memo
     )
 
 
-def fetch_memory(memory_id: str) -> Memory | None:
+def fetch_memory(memory_id: str, *, user_id: str) -> Memory | None:
+    assert user_id is not None, "user_id must be set before any memory operation"
     conn = _connect()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM memories WHERE memory_id = %s", (memory_id,))
+    cur.execute(
+        "SELECT * FROM memories WHERE memory_id = %s AND user_id = %s",
+        (memory_id, user_id),
+    )
     row = cur.fetchone()
     cur.close()
     conn.close()
@@ -97,7 +113,8 @@ def fetch_memory(memory_id: str) -> Memory | None:
     return _row_to_memory(row)
 
 
-def search_memories(query: str) -> list[Memory]:
+def search_memories(query: str, *, user_id: str) -> list[Memory]:
+    assert user_id is not None, "user_id must be set before any memory operation"
     embedding = _get_embedding(query)
 
     conn = _connect()
@@ -105,9 +122,10 @@ def search_memories(query: str) -> list[Memory]:
     cur.execute(
         """SELECT *, embedding <=> %s::vector AS distance
            FROM memories
+           WHERE user_id = %s
            ORDER BY distance
            LIMIT 5""",
-        (str(embedding),),
+        (str(embedding), user_id),
     )
     rows = cur.fetchall()
     cur.close()
@@ -116,12 +134,31 @@ def search_memories(query: str) -> list[Memory]:
     return [_row_to_memory(row) for row in rows]
 
 
+def count_memories(*, user_id: str) -> tuple[int, datetime | None]:
+    """Return (total memories, most recent created/updated timestamp) for a user."""
+    assert user_id is not None, "user_id must be set before any memory operation"
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT COUNT(*), MAX(GREATEST(created_at, COALESCE(updated_at, created_at)))
+           FROM memories WHERE user_id = %s""",
+        (user_id,),
+    )
+    total, last = cur.fetchone()
+    cur.close()
+    conn.close()
+    return total, last
+
+
 def list_memories(
     page: int = 1,
     page_size: int = 20,
     query: str | None = None,
+    *,
+    user_id: str,
 ) -> tuple[list[dict], int]:
     """Return paginated memory rows (id, title, tags, created_at, updated_at, content) and total count."""
+    assert user_id is not None, "user_id must be set before any memory operation"
     offset = (page - 1) * page_size
 
     conn = _connect()
@@ -130,27 +167,29 @@ def list_memories(
     if query:
         like = f"%{query}%"
         cur.execute(
-            "SELECT COUNT(*) FROM memories WHERE title ILIKE %s OR tags ILIKE %s",
-            (like, like),
+            """SELECT COUNT(*) FROM memories
+               WHERE user_id = %s AND (title ILIKE %s OR tags ILIKE %s)""",
+            (user_id, like, like),
         )
         total = cur.fetchone()["count"]
         cur.execute(
             """SELECT memory_id, title, tags, created_at, updated_at, content
                FROM memories
-               WHERE title ILIKE %s OR tags ILIKE %s
+               WHERE user_id = %s AND (title ILIKE %s OR tags ILIKE %s)
                ORDER BY created_at DESC
                LIMIT %s OFFSET %s""",
-            (like, like, page_size, offset),
+            (user_id, like, like, page_size, offset),
         )
     else:
-        cur.execute("SELECT COUNT(*) FROM memories")
+        cur.execute("SELECT COUNT(*) FROM memories WHERE user_id = %s", (user_id,))
         total = cur.fetchone()["count"]
         cur.execute(
             """SELECT memory_id, title, tags, created_at, updated_at, content
                FROM memories
+               WHERE user_id = %s
                ORDER BY created_at DESC
                LIMIT %s OFFSET %s""",
-            (page_size, offset),
+            (user_id, page_size, offset),
         )
 
     rows = cur.fetchall()
@@ -177,8 +216,11 @@ def update_memory(
     content: str | None = None,
     tags: list[str] | None = None,
     append_content: bool = False,
+    *,
+    user_id: str,
 ) -> Memory | None:
-    existing = fetch_memory(memory_id)
+    assert user_id is not None, "user_id must be set before any memory operation"
+    existing = fetch_memory(memory_id, user_id=user_id)
     if existing is None:
         return None
 
@@ -201,15 +243,16 @@ def update_memory(
         cur.execute(
             """UPDATE memories
                SET title = %s, content = %s, tags = %s, updated_at = %s, embedding = %s
-               WHERE memory_id = %s""",
-            (new_title, new_content, ",".join(new_tags), updated_at, embedded_str, memory_id),
+               WHERE memory_id = %s AND user_id = %s""",
+            (new_title, new_content, ",".join(new_tags), updated_at, embedded_str,
+             memory_id, user_id),
         )
     else:
         cur.execute(
             """UPDATE memories
                SET title = %s, content = %s, tags = %s, updated_at = %s
-               WHERE memory_id = %s""",
-            (new_title, new_content, ",".join(new_tags), updated_at, memory_id),
+               WHERE memory_id = %s AND user_id = %s""",
+            (new_title, new_content, ",".join(new_tags), updated_at, memory_id, user_id),
         )
     conn.commit()
     cur.close()
@@ -225,11 +268,28 @@ def update_memory(
     )
 
 
-def delete_memory(memory_id: str) -> bool:
+def delete_memory(memory_id: str, *, user_id: str) -> bool:
+    assert user_id is not None, "user_id must be set before any memory operation"
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("DELETE FROM memories WHERE memory_id = %s", (memory_id,))
+    cur.execute(
+        "DELETE FROM memories WHERE memory_id = %s AND user_id = %s",
+        (memory_id, user_id),
+    )
     deleted = cur.rowcount > 0
+    conn.commit()
+    cur.close()
+    conn.close()
+    return deleted
+
+
+def delete_all_memories(*, user_id: str) -> int:
+    """'Clear my brain' — remove every memory for a user. Returns count removed."""
+    assert user_id is not None, "user_id must be set before any memory operation"
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM memories WHERE user_id = %s", (user_id,))
+    deleted = cur.rowcount
     conn.commit()
     cur.close()
     conn.close()

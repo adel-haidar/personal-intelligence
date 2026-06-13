@@ -37,7 +37,7 @@ def _mock_conn(rowcount: int = 1) -> MagicMock:
 class TestUpdateMemory:
     def test_returns_none_for_unknown_id(self):
         with patch("private_internet.memory.service.fetch_memory", return_value=None):
-            result = update_memory("nonexistent-id", title="New Title")
+            result = update_memory("nonexistent-id", title="New Title", user_id="u1")
         assert result is None
 
     def test_partial_update_title_only(self):
@@ -47,7 +47,7 @@ class TestUpdateMemory:
             patch("private_internet.memory.service._get_embedding", return_value=[0.1] * 1024),
             patch("private_internet.memory.service._connect", return_value=_mock_conn()),
         ):
-            result = update_memory("test-id", title="New Title")
+            result = update_memory("test-id", title="New Title", user_id="u1")
 
         assert result is not None
         assert result.title == "New Title"
@@ -62,7 +62,7 @@ class TestUpdateMemory:
             patch("private_internet.memory.service._get_embedding") as mock_embed,
             patch("private_internet.memory.service._connect", return_value=_mock_conn()),
         ):
-            result = update_memory("test-id", tags=["new-tag"])
+            result = update_memory("test-id", tags=["new-tag"], user_id="u1")
 
         mock_embed.assert_not_called()
         assert result is not None
@@ -75,7 +75,7 @@ class TestUpdateMemory:
             patch("private_internet.memory.service._get_embedding", return_value=[0.1] * 1024),
             patch("private_internet.memory.service._connect", return_value=_mock_conn()),
         ):
-            result = update_memory("test-id", content="Replaced content")
+            result = update_memory("test-id", content="Replaced content", user_id="u1")
 
         assert result is not None
         assert result.content == "Replaced content"
@@ -87,7 +87,7 @@ class TestUpdateMemory:
             patch("private_internet.memory.service._get_embedding", return_value=[0.1] * 1024),
             patch("private_internet.memory.service._connect", return_value=_mock_conn()),
         ):
-            result = update_memory("test-id", content="Appended text", append_content=True)
+            result = update_memory("test-id", content="Appended text", append_content=True, user_id="u1")
 
         assert result is not None
         assert "Original content" in result.content
@@ -102,7 +102,7 @@ class TestUpdateMemory:
             patch("private_internet.memory.service._get_embedding") as mock_embed,
             patch("private_internet.memory.service._connect", return_value=_mock_conn()),
         ):
-            result = update_memory("test-id", append_content=True)
+            result = update_memory("test-id", append_content=True, user_id="u1")
 
         mock_embed.assert_not_called()
         assert result is not None
@@ -114,7 +114,7 @@ class TestUpdateMemory:
             patch("private_internet.memory.service.fetch_memory", return_value=existing),
             patch("private_internet.memory.service._connect", return_value=_mock_conn()),
         ):
-            result = update_memory("test-id")
+            result = update_memory("test-id", user_id="u1")
 
         assert result is not None
         assert result.created_at == existing.created_at
@@ -125,12 +125,12 @@ class TestUpdateMemory:
 class TestDeleteMemory:
     def test_successful_delete_returns_true(self):
         with patch("private_internet.memory.service._connect", return_value=_mock_conn(rowcount=1)):
-            result = delete_memory("test-id")
+            result = delete_memory("test-id", user_id="u1")
         assert result is True
 
     def test_nonexistent_id_returns_false(self):
         with patch("private_internet.memory.service._connect", return_value=_mock_conn(rowcount=0)):
-            result = delete_memory("nonexistent-id")
+            result = delete_memory("nonexistent-id", user_id="u1")
         assert result is False
 
 

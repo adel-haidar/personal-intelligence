@@ -64,17 +64,25 @@ mcp = FastMCP(
 )
 
 
+def _mcp_user_id() -> str:
+    """MCP connections authenticate with legacy OAuth tokens, which carry no
+    user identity — they are scoped to the seed admin's brain. Per-user MCP
+    access is a future feature."""
+    from private_internet.users.service import get_seed_admin_id
+    return get_seed_admin_id()
+
+
 @mcp.tool()
 def save(title: str, content: str, tags: list[str] | None = None) -> str:
     """Saving memory with title: {} and tags: {}"""
-    memory = save_memory(title, content, tags)
+    memory = save_memory(title, content, tags, user_id=_mcp_user_id())
     return f"Saved memory '{memory.title}' with id {memory.memory_id}"
 
 
 @mcp.tool()
 def fetch(memory_id: str) -> str:
     """Fetching Memory with ID '{memory_id}'"""
-    memory = fetch_memory(memory_id)
+    memory = fetch_memory(memory_id, user_id=_mcp_user_id())
     if memory is None:
         return f"No memory found with ID {memory_id}"
     return f"[{memory.memory_id}] {memory.title}\n{memory.content}\nTags: {', '.join(memory.tags)}"
@@ -83,7 +91,7 @@ def fetch(memory_id: str) -> str:
 @mcp.tool()
 def search(query: str) -> str:
     """Search memories by keyword. Matches against title, content, and tags."""
-    results = search_memories(query)
+    results = search_memories(query, user_id=_mcp_user_id())
     if not results:
         return f"No memories found for query: {query}"
     lines = [f"- [{m.memory_id}] {m.title}" for m in results]
@@ -105,6 +113,7 @@ def update(
         content=content,
         tags=tags,
         append_content=append_content,
+        user_id=_mcp_user_id(),
     )
     if memory is None:
         return f"No memory found with ID {memory_id}"
@@ -116,7 +125,7 @@ def delete(memory_id: str, confirm: bool) -> str:
     """Delete a memory permanently. confirm must be True to proceed."""
     if not confirm:
         return "Deletion aborted: confirm must be True to delete a memory."
-    deleted = delete_memory(memory_id)
+    deleted = delete_memory(memory_id, user_id=_mcp_user_id())
     if not deleted:
         return f"No memory found with ID {memory_id}"
     return f"Deleted memory {memory_id}"
