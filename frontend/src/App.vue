@@ -6,9 +6,12 @@ import ToastProvider from './components/ui/ToastProvider.vue'
 import { isAuthenticated, hasRefreshToken, refreshTokens } from './composables/useAuth'
 
 const route = useRoute()
-const isPublic = computed(() => !!route.meta.public)
-// Fullscreen routes (e.g. /onboarding) are authenticated but render without the sidebar shell
-const isBare = computed(() => isPublic.value || !!route.meta.fullscreen)
+// Render without the sidebar shell only on the full-bleed screens (/onboarding)
+// and for visitors who aren't signed in (login, register, oauth callback, and the
+// public /about page viewed logged-out). A signed-in user visiting a public page —
+// e.g. "How it works" → /about from the sidebar — still gets the shell so they can
+// navigate back. Re-evaluates on every route change (which accompanies auth changes).
+const isBare = computed(() => !!route.meta.fullscreen || !isAuthenticated())
 
 onMounted(async () => {
   if (!isAuthenticated() && hasRefreshToken()) {
@@ -19,7 +22,7 @@ onMounted(async () => {
 
 <template>
   <ToastProvider>
-    <!-- Public and fullscreen routes render without the sidebar shell -->
+    <!-- Full-bleed screens + signed-out visitors render without the sidebar shell -->
     <RouterView v-if="isBare" />
 
     <!-- Authenticated shell: sidebar + scrollable content -->
