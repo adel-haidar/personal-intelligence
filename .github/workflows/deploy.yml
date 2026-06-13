@@ -19,7 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       contains(github.event.head_commit.message, '[deploy-all]') ||
-      !startsWith(github.event.head_commit.message, 'feat(dashboard)')
+      (!startsWith(github.event.head_commit.message, 'feat(dashboard)') &&
+       !startsWith(github.event.head_commit.message, 'fix(dashboard)'))
 
     steps:
       - name: Configure AWS credentials via OIDC
@@ -36,10 +37,10 @@ jobs:
             --parameters "commands=[
               \"set -e\",
               \"echo ==> Pulling latest code...\",
-              \"sudo -u ${{ secrets.EC2_USER }} bash -c 'cd ~/personal-intelligence && git pull origin main'\",
+              \"sudo -u ${{ secrets.EC2_USER }} bash -c 'cd ~/personal-intelligence && git fetch origin main && git reset --hard origin/main'\",
               \"echo ==> Installing dependencies...\",
               \"sudo -u ${{ secrets.EC2_USER }} bash -c 'cd ~/personal-intelligence && source .venv/bin/activate && pip install -e . --quiet && pip install -r agents/requirements.txt --quiet'\",
-              \"echo ==> Deploying systemd units (names unchanged; contents reference the private_internet package)...\",
+              \"echo '==> Deploying systemd units - names unchanged, contents reference the private_internet package...'\",
               \"cp /home/${{ secrets.EC2_USER }}/personal-intelligence/systemd/personal-intelligence-api.service /etc/systemd/system/personal-intelligence-api.service\",
               \"cp /home/${{ secrets.EC2_USER }}/personal-intelligence/systemd/personal-intelligence-agents.service /etc/systemd/system/personal-intelligence-agents.service\",
               \"systemctl daemon-reload\",
@@ -103,7 +104,8 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       contains(github.event.head_commit.message, '[deploy-all]') ||
-      !startsWith(github.event.head_commit.message, 'feat(backend)')
+      (!startsWith(github.event.head_commit.message, 'feat(backend)') &&
+       !startsWith(github.event.head_commit.message, 'fix(backend)'))
 
     defaults:
       run:
