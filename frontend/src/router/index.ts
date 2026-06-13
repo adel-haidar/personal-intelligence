@@ -35,10 +35,12 @@ const router = createRouter({
     { path: '/pulse',      component: () => import('../views/PulseFeed.vue'), meta: { title: 'Pulse' } },
     { path: '/signal',     component: () => import('../views/SignalPlayer.vue'), meta: { title: 'Signal' } },
     { path: '/settings',   component: () => import('../views/SettingsView.vue') },
+    { path: '/finances',   component: () => import('../views/FinancesView.vue') },
+    { path: '/about',      component: () => import('../views/AboutView.vue'), meta: { public: true } },
   ],
 })
 
-const PUBLIC = new Set(['/login', '/register', '/oauth/callback'])
+const PUBLIC = new Set(['/login', '/register', '/oauth/callback', '/about'])
 
 router.beforeEach(async (to) => {
   if (PUBLIC.has(to.path)) return true

@@ -1,0 +1,237 @@
+/* ============================================================================
+   PRIVATE INTERNET — "Calm Intelligence" Design System
+   Complete design token set. Light + Dark mode.
+   Lift these custom properties directly into the production codebase.
+   ============================================================================ */
+
+/* ---- Fonts ---------------------------------------------------------------- */
+/* Display/Headings: Plus Jakarta Sans · Body: Inter · Editorial: Lora · Data: JetBrains Mono */
+
+/* ============================================================================
+   COLOR TOKENS
+   ============================================================================ */
+[data-theme="light"] {
+  --background-page:       #F8F7F4;
+  --background-surface:    #FFFFFF;
+  --background-raised:     #F2F1EE;
+  --background-input:      #FAFAF8;
+
+  --text-primary:          #1C1B2E;
+  --text-secondary:        #5A5970;
+  --text-tertiary:         #9896A8;
+
+  --accent-primary:        #5B5BD6;
+  --accent-hover:          #4A4ABE;
+  --accent-surface:        #EEECFF;
+
+  --brain-amber:           #E8A444;
+  --brain-amber-surface:   #FEF3E0;
+
+  --border-subtle:         #E8E6E0;
+  --border-medium:         #D4D1C8;
+  --border-strong:         #B8B4A8;
+
+  --success:               #2D7A4F;
+  --warning:               #B45309;
+  --danger:                #C0392B;
+  --info:                  #2563EB;
+
+  --shadow-menu:           0 4px 16px rgba(0,0,0,0.08);
+
+  /* semantic surfaces for tone pills / states (derived, light) */
+  --success-surface:       #E4F2EA;
+  --danger-surface:        #FBE9E7;
+  --warning-surface:       #FCEFD9;
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --background-page:       #0C0C14;
+  --background-surface:    #13131E;
+  --background-raised:     #1A1A28;
+  --background-input:      #0F0F1A;
+
+  --text-primary:          #E4E4F0;
+  --text-secondary:        #9090AA;
+  --text-tertiary:         #5A5A70;
+
+  --accent-primary:        #7C7EE0;
+  --accent-hover:          #9092E8;
+  --accent-surface:        #1E1E38;
+
+  --brain-amber:           #D4923A;
+  --brain-amber-surface:   #221A0C;
+
+  --border-subtle:         #1E1E2E;
+  --border-medium:         #282838;
+  --border-strong:         #363650;
+
+  --success:               #34D399;
+  --warning:               #FBBF24;
+  --danger:                #F87171;
+  --info:                  #60A5FA;
+
+  --shadow-menu:           0 4px 16px rgba(0,0,0,0.40);
+
+  --success-surface:       #102A1E;
+  --danger-surface:        #2A1413;
+  --warning-surface:       #2A2008;
+
+  color-scheme: dark;
+}
+
+/* ============================================================================
+   TYPE SCALE  (size / line-height / weight)
+   ============================================================================ */
+:root {
+  --font-display: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-body:    'Inter', system-ui, sans-serif;
+  --font-serif:   'Lora', Georgia, serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, monospace;
+
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-base: 15px;
+  --text-md:   17px;
+  --text-lg:   22px;
+  --text-xl:   30px;
+  --text-2xl:  42px;
+
+  /* spacing scale — base 4px */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+  --space-12: 48px; --space-16: 64px;
+
+  --radius-sm:  8px;   /* input, button, badge */
+  --radius-md:  12px;  /* card */
+  --radius-lg:  16px;  /* modal */
+  --radius-pill: 999px;
+
+  --sidebar-w: 240px;
+  --content-reading: 860px;
+  --content-dashboard: 1100px;
+
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ============================================================================
+   RESET + BASE
+   ============================================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.65;
+  color: var(--text-primary);
+  background: var(--background-page);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s var(--ease), color 0.3s var(--ease);
+}
+
+h1, h2, h3, h4 { font-family: var(--font-display); font-weight: 600; line-height: 1.2; }
+h1 { letter-spacing: -0.01em; }
+
+button, input, textarea, select { font-family: inherit; font-size: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: none; }
+a { color: var(--accent-primary); text-decoration: none; }
+
+::selection { background: var(--accent-surface); color: var(--accent-hover); }
+
+/* scrollbars — quiet */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-medium); border-radius: 999px; border: 3px solid var(--background-page); }
+*::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* focus ring — 2px accent, offset 2px, never hidden */
+:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+
+/* utility text classes */
+.t-mono { font-family: var(--font-mono); }
+.t-serif { font-family: var(--font-serif); }
+.t-secondary { color: var(--text-secondary); }
+.t-tertiary { color: var(--text-tertiary); }
+.u-data { font-family: var(--font-mono); font-size: 0.93em; }
+
+/* ============================================================================
+   BRAIN PULSE — signature animation
+   4 dots orbiting a center at different radius + speed. Loops organically.
+   Scale via font-size-independent --bp-scale on the wrapper.
+   ============================================================================ */
+.brain-pulse {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+  flex: 0 0 auto;
+}
+.brain-pulse .bp-center,
+.brain-pulse .bp-dot {
+  position: absolute;
+  top: 50%; left: 50%;
+  border-radius: 50%;
+  background: var(--brain-amber);
+}
+.brain-pulse .bp-center {
+  width: 22%; height: 22%;
+  transform: translate(-50%, -50%);
+  opacity: 0.9;
+}
+.brain-pulse .bp-orbit {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 0; height: 0;
+}
+.brain-pulse .bp-dot {
+  width: var(--bp-dot, 3px);
+  height: var(--bp-dot, 3px);
+  transform: translate(-50%, -50%);
+}
+.brain-pulse .bp-o1 { animation: bp-orbit-1 8s linear infinite; }
+.brain-pulse .bp-o2 { animation: bp-orbit-2 12s linear infinite; }
+.brain-pulse .bp-o3 { animation: bp-orbit-3 10s linear infinite; }
+.brain-pulse .bp-o4 { animation: bp-orbit-4 15s linear infinite; }
+.brain-pulse .bp-o1 .bp-dot { opacity: 0.95; }
+.brain-pulse .bp-o2 .bp-dot { opacity: 0.75; }
+.brain-pulse .bp-o3 .bp-dot { opacity: 0.85; }
+.brain-pulse .bp-o4 .bp-dot { opacity: 0.6; }
+
+@keyframes bp-orbit-1 { from { transform: rotate(0deg)   translateX(var(--r1)); } to { transform: rotate(360deg) translateX(var(--r1)); } }
+@keyframes bp-orbit-2 { from { transform: rotate(90deg)  translateX(var(--r2)); } to { transform: rotate(450deg) translateX(var(--r2)); } }
+@keyframes bp-orbit-3 { from { transform: rotate(200deg) translateX(var(--r3)); } to { transform: rotate(560deg) translateX(var(--r3)); } }
+@keyframes bp-orbit-4 { from { transform: rotate(310deg) translateX(var(--r4)); } to { transform: rotate(670deg) translateX(var(--r4)); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .brain-pulse .bp-o1, .brain-pulse .bp-o2,
+  .brain-pulse .bp-o3, .brain-pulse .bp-o4 { animation: none; }
+  /* static asymmetric resting positions */
+  .brain-pulse .bp-o1 { transform: rotate(20deg)  translateX(var(--r1)); }
+  .brain-pulse .bp-o2 { transform: rotate(140deg) translateX(var(--r2)); }
+  .brain-pulse .bp-o3 { transform: rotate(250deg) translateX(var(--r3)); }
+  .brain-pulse .bp-o4 { transform: rotate(330deg) translateX(var(--r4)); }
+}
+
+/* ============================================================================
+   SHARED ANIMATIONS
+   ============================================================================ */
+@keyframes pi-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pi-slide-down { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pi-slide-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pi-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+@keyframes pi-spin { to { transform: rotate(360deg); } }
+@keyframes pi-amber-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.pi-skeleton {
+  background: linear-gradient(90deg, var(--background-raised) 25%, var(--border-subtle) 50%, var(--background-raised) 75%);
+  background-size: 800px 100%;
+  animation: pi-shimmer 1.4s linear infinite;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}

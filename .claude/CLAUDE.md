@@ -79,7 +79,13 @@ personal-intelligence/                  (repo dir; product = "Private Internet")
 - **All schema changes need a migration** in `migrations/`; startup bootstrap may mirror it.
 - **Deterministic pipelines (bank, health) use `temperature=0`.** Creative content
   generation (PULSE post text) may use higher temperature where the module documents it.
-- **Frontend aesthetic:** "Soviet bureaucratic" dark theme — no light mode, no pastels.
+- **Frontend aesthetic:** "Calm Intelligence" — a light/dark design system (indigo
+  `--accent-primary`, warm `--brain-amber`, Plus Jakarta Sans / Inter / Lora serif /
+  JetBrains Mono). Theme persists, dark is default. Tokens live in
+  `frontend/src/styles/tokens.css` (lifted from the Claude Design handoff). This
+  **replaced** the old Soviet-bureaucratic dark theme (a personal joke, unfit for a
+  public product). No shadows on cards (depth = bg steps + borders); shadows only on
+  menus/toasts. The signature element is the amber **Brain Pulse** (4 orbiting dots).
 - Ports are fixed: API **8000**, agents **8001**. (The old 8002 auth/file service is retired.)
 - After any change, follow the root `CLAUDE.md` commit/deploy rules. The product work lives
   on branch `product/private-internet` — do not push to `main` (it auto-deploys) unless asked.

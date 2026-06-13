@@ -41,11 +41,20 @@ Everything under `frontend/`:
   same Bearer-token plumbing and the existing router guard; coordinate the exact endpoint
   contract with the backend (`users/routes.py`) before building forms.
 
-## Design System — Soviet Bureaucratic Dark
-- Background near-black (#0d0d0d / #111); accent muted red (#8b1a1a / #c0392b) + cold grey.
-- Monospace for data; no light mode, no pastels, no rounded cards, no bouncy animations.
-- 1px low-opacity grey borders; slow, deliberate transitions.
-- Match the existing components — read `style.css` and a neighbouring view first.
+## Design System — "Calm Intelligence" (light + dark)
+- Tokens live in `frontend/src/styles/tokens.css` — `[data-theme="light"]` / `[data-theme="dark"]`
+  CSS custom properties. Theme persists to localStorage (`pi-theme`), dark is default.
+  **Always** style via `var(--*)` (e.g. `--accent-primary` indigo, `--brain-amber`,
+  `--background-surface`, `--text-secondary`, `--border-subtle`) — never raw hex.
+- Fonts: Plus Jakarta Sans (display/headings), Inter (body), **Lora serif** (personal
+  writing only — memory content, onboarding intro, brain subtext), JetBrains Mono (data/
+  numbers). 4px spacing base; radius 8 (input/button/badge) / 12 (card) / 16 (modal) /
+  999 (pill). **No shadows on cards** (depth = bg steps + borders); shadow only on menus/toasts.
+- Signature element: the amber **Brain Pulse** (`BrainPulse` component, 4 orbiting dots,
+  `aria-hidden`, reduced-motion fallback). Sentence case everywhere; no ALL-CAPS prose.
+- This replaced the old Soviet-bureaucratic dark theme. Match existing redesigned
+  components — read `tokens.css`, `pi-components.css`-derived styles, and a neighbouring
+  redesigned view first. The source handoff is the Claude Design bundle (HANDOFF.md).
 
 ## Workflow
 1. Read the relevant view/component/composable before editing.
