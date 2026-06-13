@@ -34,7 +34,6 @@ const router = createRouter({
     { path: '/email',      component: () => import('../views/EmailView.vue') },
     { path: '/health', component: () => import('../views/HealthView.vue') },
     { path: '/job', name: 'jobs', component: () => import('../views/JobsView.vue'), meta: { title: 'Job Hunt' } },
-    { path: '/hermes',     component: () => import('../views/HermesView.vue') },
     { path: '/pulse',      component: () => import('../views/PulseFeed.vue'), meta: { title: 'Pulse' } },
     { path: '/signal',     component: () => import('../views/SignalPlayer.vue'), meta: { title: 'Signal' } },
     { path: '/settings',   component: () => import('../views/SettingsView.vue') },

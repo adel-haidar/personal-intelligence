@@ -33,17 +33,13 @@ const NAV_MAIN: NavItem[] = [
   { label: 'Pulse',        to: '/pulse',     icon: 'pulse' },
   { label: 'Health',       to: '/health',    icon: 'health' },
   { label: 'Finances',     to: '/finances',  icon: 'finances' },
+  { label: 'Email',        to: '/email',     icon: 'email' },
+  { label: 'Job hunt',     to: '/job',       icon: 'job' },
 ]
 
 const NAV_SYS: NavItem[] = [
   { label: 'Settings',     to: '/settings',  icon: 'settings' },
   { label: 'How it works', to: '/about',     icon: 'help' },
-]
-
-const NAV_TOOLS: NavItem[] = [
-  { label: 'Email',        to: '/email',      icon: 'email' },
-  { label: 'Job hunt',     to: '/job',        icon: 'job' },
-  { label: 'Hermes',       to: '/hermes',     icon: 'hermes' },
 ]
 </script>
 
@@ -89,26 +85,6 @@ const NAV_TOOLS: NavItem[] = [
 
       <RouterLink
         v-for="item in NAV_SYS"
-        :key="item.to"
-        :to="item.to"
-        custom
-        v-slot="{ isActive, navigate }"
-      >
-        <button
-          :class="['pi-nav__item', isActive ? 'pi-nav__item--active' : '']"
-          @click="navigate"
-        >
-          <PIIcon :name="item.icon" :size="18" />
-          <span class="pi-nav__label">{{ item.label }}</span>
-        </button>
-      </RouterLink>
-
-      <!-- Divider + legacy tools -->
-      <div class="pi-nav__sep" />
-      <span class="pi-nav__section-label">Tools</span>
-
-      <RouterLink
-        v-for="item in NAV_TOOLS"
         :key="item.to"
         :to="item.to"
         custom
