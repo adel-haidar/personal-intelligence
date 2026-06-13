@@ -156,18 +156,11 @@ def _chunk_text(text: str) -> list[str]:
     return chunks
 
 
-@router.post("/file")
-async def upload_file(
-    file: UploadFile,
-    ctx: RequestContext = Depends(get_request_context),
-):
-    upload_dir = os.path.join(get_settings().upload_dir, ctx.user_id)
-    os.makedirs(upload_dir, exist_ok=True)
-
+async def _save_uploaded_file(file: UploadFile, upload_dir: str, user_id: str) -> dict:
     content = await file.read()
 
     if not content:
-        return {"error": "Empty file"}
+        return {"error": "Empty file", "filename": file.filename}
 
     file_hash = hashlib.sha256(content).hexdigest()[:12]
     timestamp = datetime.datetime.now().isoformat()
@@ -187,7 +180,7 @@ async def upload_file(
         for i, chunk in enumerate(chunks):
             title = file.filename if total == 1 else f"{file.filename} ({i + 1}/{total})"
             saved = save_memory(
-                title=title, content=chunk, tags=["file-upload", "pdf"], user_id=ctx.user_id
+                title=title, content=chunk, tags=["file-upload", "pdf"], user_id=user_id
             )
             if first_saved is None:
                 first_saved = saved
@@ -200,7 +193,7 @@ async def upload_file(
                 f"Hash: {file_hash}."
             ),
             tags=["file-upload", ext],
-            user_id=ctx.user_id,
+            user_id=user_id,
         )
 
     return {
@@ -209,3 +202,16 @@ async def upload_file(
         "filename": filename,
         "size": len(content),
     }
+
+
+@router.post("/file")
+async def upload_file(
+    files: list[UploadFile],
+    ctx: RequestContext = Depends(get_request_context),
+):
+    upload_dir = os.path.join(get_settings().upload_dir, ctx.user_id)
+    os.makedirs(upload_dir, exist_ok=True)
+
+    results = [await _save_uploaded_file(f, upload_dir, ctx.user_id) for f in files]
+
+    return {"status": "ok", "count": len(results), "files": results}

@@ -270,15 +270,15 @@ function triggerFileInput(): void {
 
 async function handleFileChange(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  input.value = '' // reset so same file can be re-selected
+  const files = Array.from(input.files ?? [])
+  if (files.length === 0) return
+  input.value = '' // reset so same file(s) can be re-selected
 
   uploading.value = true
   try {
     const token = await requireAuth()
     const form = new FormData()
-    form.append('file', file)
+    for (const file of files) form.append('files', file)
 
     const res = await fetch(`${API_BASE}/api/file`, {
       method: 'POST',
@@ -287,7 +287,12 @@ async function handleFileChange(event: Event): Promise<void> {
     })
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
 
-    toast('File attached to your brain', 'success')
+    toast(
+      files.length === 1
+        ? 'File attached to your brain'
+        : `${files.length} files attached to your brain`,
+      'success',
+    )
     // Refresh both stats and list to show new file-backed memory
     await Promise.all([fetchStats(), fetchMemories(true)])
     await nextTick()
@@ -360,6 +365,7 @@ const hasMore = computed(() => page.value < pages.value)
         <input
           ref="fileInputRef"
           type="file"
+          multiple
           aria-hidden="true"
           tabindex="-1"
           style="display: none"
