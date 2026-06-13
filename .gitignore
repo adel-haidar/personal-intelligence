@@ -30,3 +30,4 @@ Thumbs.db
 *.key
 .ssh/
 frontend/.design-reference/
+design_handoff_health_export_guide/

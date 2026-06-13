@@ -29,7 +29,7 @@ const router = createRouter({
       component: () => import('../views/OnboardingView.vue'),
       meta:      { fullscreen: true },
     },
-    { path: '/overview',   component: () => import('../views/OverviewView.vue') },
+    { path: '/overview',   component: () => import('../views/DashboardView.vue'), meta: { title: 'Dashboard' } },
     { path: '/memory',     component: () => import('../views/BrainView.vue'), meta: { title: 'Your Brain' } },
     { path: '/email',      component: () => import('../views/EmailView.vue') },
     { path: '/health', component: () => import('../views/HealthView.vue') },
