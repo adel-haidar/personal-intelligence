@@ -175,6 +175,7 @@ export interface RegisterParams {
   display_name: string
   password: string
   referral_source?: string
+  plan?: string
 }
 
 export interface LoginParams {
@@ -183,8 +184,20 @@ export interface LoginParams {
 }
 
 export interface PasswordAuthResult {
-  token: string
-  user: User
+  token?: string
+  user?: User
+  email_verification_required?: boolean
+  message?: string
+}
+
+/** Extended error that carries the HTTP status so callers can branch on 403/404/401. */
+export class AuthHttpError extends AuthError {
+  status: number
+  constructor(msg: string, status: number) {
+    super(msg)
+    this.name   = 'AuthHttpError'
+    this.status = status
+  }
 }
 
 export async function registerWithPassword(params: RegisterParams): Promise<PasswordAuthResult> {
@@ -197,10 +210,14 @@ export async function registerWithPassword(params: RegisterParams): Promise<Pass
   const data = await res.json() as PasswordAuthResult & { error?: string }
 
   if (!res.ok) {
-    throw new AuthError(data.error ?? `Registration failed (${res.status})`)
+    throw new AuthHttpError(data.error ?? `Registration failed (${res.status})`, res.status)
   }
 
-  storeJwt(data.token)
+  // Only store a token when one is present (email verification may withhold it).
+  if (data.token) {
+    storeJwt(data.token)
+  }
+
   return data
 }
 
@@ -214,9 +231,43 @@ export async function loginWithPassword(params: LoginParams): Promise<PasswordAu
   const data = await res.json() as PasswordAuthResult & { error?: string }
 
   if (!res.ok) {
-    throw new AuthError(data.error ?? `Login failed (${res.status})`)
+    throw new AuthHttpError(data.error ?? `Login failed (${res.status})`, res.status)
   }
 
-  storeJwt(data.token)
+  if (data.token) {
+    storeJwt(data.token)
+  }
+
   return data
+}
+
+export async function resendVerification(email: string): Promise<void> {
+  await fetch(`${API_BASE}/api/auth/resend-verification`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ email }),
+  })
+  // Always resolves — backend returns 200 regardless of whether email exists.
+}
+
+export async function forgotPassword(email: string): Promise<void> {
+  await fetch(`${API_BASE}/api/auth/forgot-password`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ email }),
+  })
+  // Always resolves with a 200 to avoid account enumeration.
+}
+
+export async function resetPassword(token: string, newPassword: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ token, new_password: newPassword }),
+  })
+
+  if (!res.ok) {
+    const data = await res.json() as { error?: string }
+    throw new AuthError(data.error ?? `Password reset failed (${res.status})`)
+  }
 }

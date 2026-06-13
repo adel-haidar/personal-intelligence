@@ -39,6 +39,7 @@ def create_user_token(user: dict) -> str:
         "sub": str(user["id"]),
         "email": user["email"],
         "is_admin": bool(user.get("is_admin")),
+        "plan": user.get("plan") or "free",
         "iat": now,
         "exp": now + _TOKEN_TTL_SECONDS,
     }

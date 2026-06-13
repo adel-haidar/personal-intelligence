@@ -8,7 +8,11 @@ import {
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/overview' },
+    {
+      path:      '/',
+      component: () => import('../views/LandingView.vue'),
+      meta:      { public: true },
+    },
     {
       path:      '/login',
       component: () => import('../views/Login.vue'),
@@ -22,6 +26,16 @@ const router = createRouter({
     {
       path:      '/register',
       component: () => import('../views/Register.vue'),
+      meta:      { public: true },
+    },
+    {
+      path:      '/forgot-password',
+      component: () => import('../views/ForgotPassword.vue'),
+      meta:      { public: true },
+    },
+    {
+      path:      '/reset-password',
+      component: () => import('../views/ResetPassword.vue'),
       meta:      { public: true },
     },
     {
@@ -43,10 +57,12 @@ const router = createRouter({
   ],
 })
 
-const PUBLIC = new Set(['/login', '/register', '/oauth/callback', '/about'])
+const PUBLIC = new Set(['/', '/login', '/register', '/oauth/callback', '/about', '/forgot-password', '/reset-password'])
 
 router.beforeEach(async (to) => {
   if (PUBLIC.has(to.path)) return true
+  // Allow /onboarding when arriving from an email-verification link that carries ?token=
+  if (to.path === '/onboarding' && to.query.token) return true
   if (isAuthenticated()) return true
   if (hasRefreshToken()) {
     try {

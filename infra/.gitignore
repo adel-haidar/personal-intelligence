@@ -1,0 +1,15 @@
+# CDK output
+cdk.out/
+
+# npm
+node_modules/
+
+# TypeScript build artifacts
+dist/
+*.js
+*.d.ts
+!jest.config.js
+
+# Local secrets (should never appear here anyway)
+.env
+*.pem

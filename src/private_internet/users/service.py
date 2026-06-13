@@ -1,7 +1,8 @@
 """User accounts for the multi-tenant Private Internet platform."""
 
 import logging
-from datetime import datetime, timezone
+import secrets
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
 from psycopg2.extras import RealDictCursor
@@ -30,18 +31,34 @@ def init_users_db() -> None:
             last_active_at TIMESTAMPTZ DEFAULT now()
         )
     """)
+    # SaaS columns referenced by create_user. The full SaaS migration
+    # (core/saas_migration.py) runs later in lifespan and (re)asserts these
+    # idempotently plus the rest; we add the two that create_user writes here so
+    # seed-admin creation during the earlier multi-tenancy step does not fail on
+    # a fresh database.
+    cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR(32) DEFAULT 'free'")
+    cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_ip VARCHAR(64)")
     conn.commit()
     cur.close()
     conn.close()
 
 
+# Sensitive/secret columns that must never be serialized into an API response.
+_PRIVATE_COLUMNS = (
+    "password_hash",
+    "email_verification_token",
+    "password_reset_token",
+)
+
+
 def _serialize_user(row: dict) -> dict:
     user = dict(row)
     user["id"] = str(user["id"])
-    for key in ("created_at", "last_active_at"):
-        if isinstance(user.get(key), datetime):
-            user[key] = user[key].isoformat()
-    user.pop("password_hash", None)  # never leaks past the service layer
+    for key, value in list(user.items()):
+        if isinstance(value, datetime):
+            user[key] = value.isoformat()
+    for col in _PRIVATE_COLUMNS:
+        user.pop(col, None)  # secrets never leak past the service layer
     return user
 
 
@@ -86,14 +103,16 @@ def create_user(
     display_name: str,
     password_hash: str | None = None,
     is_admin: bool = False,
+    plan: str = "free",
+    registration_ip: str | None = None,
 ) -> dict:
     conn = _connect()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute(
-        """INSERT INTO users (email, display_name, password_hash, is_admin)
-           VALUES (%s, %s, %s, %s)
+        """INSERT INTO users (email, display_name, password_hash, is_admin, plan, registration_ip)
+           VALUES (%s, %s, %s, %s, %s, %s)
            RETURNING *""",
-        (email, display_name, password_hash, is_admin),
+        (email, display_name, password_hash, is_admin, plan, registration_ip),
     )
     row = cur.fetchone()
     conn.commit()
@@ -108,6 +127,9 @@ def update_user(user_id: str, **fields) -> dict | None:
     allowed = {
         "display_name", "avatar_url", "password_hash", "language_preference",
         "onboarding_completed", "onboarding_step", "is_admin",
+        "plan", "email_verified", "provisioned_at",
+        "email_verification_token", "email_verification_sent_at",
+        "password_reset_token", "password_reset_expires_at",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -133,6 +155,125 @@ def touch_last_active(user_id: str) -> None:
     cur.execute(
         "UPDATE users SET last_active_at = %s WHERE id = %s",
         (datetime.now(timezone.utc), user_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+# ── Email verification ──────────────────────────────────────────────
+
+def set_verification_token(user_id: str) -> str:
+    """Generate, store and return a fresh email-verification token."""
+    token = secrets.token_urlsafe(32)
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE users
+           SET email_verification_token = %s, email_verification_sent_at = %s
+           WHERE id = %s""",
+        (token, datetime.now(timezone.utc), user_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    return token
+
+
+def get_user_by_verification_token(token: str) -> dict | None:
+    """Return the (unverified) user holding this verification token, if any.
+
+    The returned dict includes ``email_verification_sent_at`` (ISO string) so the
+    caller can enforce the TTL. Never returns already-verified users.
+    """
+    if not token:
+        return None
+    conn = _connect()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """SELECT * FROM users
+           WHERE email_verification_token = %s AND email_verified = FALSE""",
+        (token,),
+    )
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return _serialize_user(row) if row else None
+
+
+def mark_email_verified(user_id: str) -> dict | None:
+    conn = _connect()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        """UPDATE users
+           SET email_verified = TRUE,
+               email_verification_token = NULL,
+               email_verification_sent_at = NULL
+           WHERE id = %s
+           RETURNING *""",
+        (user_id,),
+    )
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return _serialize_user(row) if row else None
+
+
+# ── Password reset ──────────────────────────────────────────────────
+
+def set_reset_token(user_id: str, ttl_hours: int) -> str:
+    """Generate, store and return a password-reset token with an expiry."""
+    token = secrets.token_urlsafe(32)
+    expires = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE users
+           SET password_reset_token = %s, password_reset_expires_at = %s
+           WHERE id = %s""",
+        (token, expires, user_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    return token
+
+
+def get_user_by_reset_token(token: str) -> dict | None:
+    """Return the user holding this reset token (regardless of expiry — the
+    caller decides). Includes ``password_reset_expires_at`` (ISO string)."""
+    if not token:
+        return None
+    conn = _connect()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM users WHERE password_reset_token = %s", (token,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return _serialize_user(row) if row else None
+
+
+def clear_reset_token(user_id: str) -> None:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE users
+           SET password_reset_token = NULL, password_reset_expires_at = NULL
+           WHERE id = %s""",
+        (user_id,),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def set_password(user_id: str, password_hash: str) -> None:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE users SET password_hash = %s WHERE id = %s",
+        (password_hash, user_id),
     )
     conn.commit()
     cur.close()

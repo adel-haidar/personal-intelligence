@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { requireAuth } from '../composables/useAuth'
 import { API_BASE } from '../config/env'
 import BrandMark from '../components/ui/BrandMark.vue'
@@ -15,6 +15,37 @@ import PIIcon from '../components/ui/PIIcon.vue'
 
 // ── router ───────────────────────────────────────────────────────────────────
 const router = useRouter()
+const route  = useRoute()
+
+// Banner shown when landing here from an email-verification redirect.
+const emailVerifiedBanner = ref(false)
+
+onMounted(() => {
+  // If the backend redirected here with ?token=...&verified=1, store the JWT
+  // so requireAuth() calls work immediately.
+  const urlToken = route.query.token as string | undefined
+  const verified = route.query.verified as string | undefined
+
+  if (urlToken) {
+    // Import storeJwt is not exported, but we can leverage the sessionStorage
+    // key directly (same as storeJwt internals) to avoid circular imports.
+    const expMs = (() => {
+      try {
+        const seg = urlToken.split('.')[1]
+        if (!seg) return null
+        const j = JSON.parse(atob(seg.replace(/-/g, '+').replace(/_/g, '/'))) as { exp?: number }
+        return typeof j.exp === 'number' ? j.exp * 1000 : null
+      } catch { return null }
+    })() ?? (Date.now() + 7 * 24 * 60 * 60 * 1000)
+    sessionStorage.setItem('pi_access_token', urlToken)
+    sessionStorage.setItem('pi_token_expires_at', String(expMs))
+    sessionStorage.removeItem('pi_refresh_token')
+  }
+
+  if (verified === '1') {
+    emailVerifiedBanner.value = true
+  }
+})
 
 // ── wizard state ─────────────────────────────────────────────────────────────
 const TOTAL = 5
@@ -225,6 +256,31 @@ onBeforeUnmount(() => {
     <!-- Progress track -->
     <div class="pi-onb__track">
       <div class="pi-onb__bar" :style="{ width: progressPct }" />
+    </div>
+
+    <!-- Email verified banner -->
+    <div
+      v-if="emailVerifiedBanner"
+      role="status"
+      style="
+        background: var(--success-surface);
+        color: var(--success);
+        border-bottom: 1px solid var(--success);
+        padding: var(--space-3) var(--space-6);
+        font-size: var(--text-sm);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-4);
+      "
+    >
+      <span>Your email has been verified. Welcome to Private Internet.</span>
+      <button
+        type="button"
+        style="background: none; border: none; color: var(--success); cursor: pointer; padding: 0; font-size: var(--text-xs); opacity: 0.7;"
+        @click="emailVerifiedBanner = false"
+        aria-label="Dismiss"
+      >Dismiss</button>
     </div>
 
     <!-- Body -->

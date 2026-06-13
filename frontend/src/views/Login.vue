@@ -7,6 +7,8 @@ import {
   refreshTokens,
   isAuthenticated,
   loginWithPassword,
+  resendVerification,
+  AuthHttpError,
 } from '../composables/useAuth'
 import BrainPulse from '../components/ui/BrainPulse.vue'
 import PiCard from '../components/ui/PiCard.vue'
@@ -26,10 +28,25 @@ const oauthLoading   = ref(false)
 const resuming       = ref(false)
 const error          = ref('')
 const hasSession     = computed(() => hasRefreshToken())
-const forgotClicked  = ref(false)
+
+/** Set when backend returns 403 email_not_verified */
+const emailNotVerified     = ref(false)
+const resendEmail          = ref('')
+const resendLoading        = ref(false)
+const resendSent           = ref(false)
+
+/** Banner from ?verify_error= query param (email link redirected back here) */
+const verifyErrorBanner = computed<string | null>(() => {
+  const q = vRoute.query.verify_error as string | undefined
+  if (q === 'expired') return 'That verification link has expired. Request a new one below.'
+  if (q === 'invalid') return 'That verification link is invalid or already used.'
+  return null
+})
+
+/** Banner when landing on /login?verified=... (shouldn't happen per spec, but defensive) */
 
 const intendedRoute = computed(
-  () => (vRoute.query.redirect as string | undefined) ?? '/'
+  () => (vRoute.query.redirect as string | undefined) ?? '/overview'
 )
 
 onMounted(() => {
@@ -43,14 +60,39 @@ async function handleLogin() {
     error.value = 'Email and password are required.'
     return
   }
-  loading.value = true
-  error.value   = ''
+  loading.value        = true
+  error.value          = ''
+  emailNotVerified.value = false
+
   try {
     await loginWithPassword({ email: email.value.trim(), password: password.value })
     router.replace(intendedRoute.value)
   } catch (e) {
-    error.value   = (e as Error).message ?? 'Login failed'
+    const err = e as AuthHttpError
+
+    if (err.status === 404) {
+      error.value = 'No account found with this email address.'
+    } else if (err.status === 401) {
+      error.value = 'Incorrect password.'
+    } else if (err.status === 403 && err.message === 'email_not_verified') {
+      emailNotVerified.value = true
+      resendEmail.value = email.value.trim()
+    } else {
+      error.value = err.message ?? 'Login failed'
+    }
+
     loading.value = false
+  }
+}
+
+async function handleResendVerification() {
+  if (resendLoading.value || resendSent.value) return
+  resendLoading.value = true
+  try {
+    await resendVerification(resendEmail.value)
+    resendSent.value = true
+  } finally {
+    resendLoading.value = false
   }
 }
 
@@ -76,11 +118,6 @@ async function handleResume() {
     error.value    = (e as Error).message ?? 'Session could not be resumed'
     resuming.value = false
   }
-}
-
-function handleForgot(e: Event) {
-  e.preventDefault()
-  forgotClicked.value = true
 }
 
 const VALUE_PROPS = [
@@ -111,6 +148,8 @@ const VALUE_PROPS = [
         </ul>
 
         <div class="auth-brand-links">
+          <router-link to="/" class="auth-text-link">Home</router-link>
+          <span class="t-tertiary" aria-hidden="true">·</span>
           <router-link to="/about" class="auth-text-link">How it works</router-link>
           <span class="t-tertiary" aria-hidden="true">·</span>
           <a
@@ -118,7 +157,7 @@ const VALUE_PROPS = [
             target="_blank"
             rel="noopener noreferrer"
             class="auth-text-link"
-          >View on GitHub</a>
+          >GitHub</a>
         </div>
       </div>
     </div>
@@ -127,6 +166,23 @@ const VALUE_PROPS = [
     <div class="pi-auth__form">
       <div class="auth-mode-toggle">
         <ModeToggle :withLabel="false" />
+      </div>
+
+      <!-- verify_error banner -->
+      <div
+        v-if="verifyErrorBanner"
+        class="auth-banner auth-banner--warning"
+        role="alert"
+        style="width: 100%; max-width: 360px; margin-bottom: var(--space-4);"
+      >
+        <PIIcon name="shield" :size="14" aria-hidden="true" />
+        {{ verifyErrorBanner }}
+        <button
+          v-if="email"
+          class="auth-banner__action"
+          type="button"
+          @click="resendEmail = email; handleResendVerification()"
+        >Resend verification</button>
       </div>
 
       <form style="width: 100%; max-width: 360px;" @submit.prevent="handleLogin" novalidate>
@@ -147,7 +203,12 @@ const VALUE_PROPS = [
             </div>
 
             <div class="pi-field">
-              <label class="pi-label" for="login-password">Password</label>
+              <div class="auth-password-label-row">
+                <label class="pi-label" for="login-password">Password</label>
+                <router-link to="/forgot-password" class="auth-text-link auth-text-link--muted auth-text-link--sm">
+                  Forgot password?
+                </router-link>
+              </div>
               <PiInput
                 id="login-password"
                 v-model="password"
@@ -159,12 +220,34 @@ const VALUE_PROPS = [
             </div>
 
             <PiButton variant="cta" :block="true" :loading="loading" type="submit">
-              Sign in
+              Sign in →
             </PiButton>
 
+            <!-- Generic error -->
             <p v-if="error" class="pi-field__error auth-error-center" role="alert">
               {{ error }}
             </p>
+
+            <!-- Email not verified error -->
+            <div v-if="emailNotVerified" class="auth-verify-error" role="alert">
+              <p class="pi-field__error auth-error-center">
+                Please verify your email before signing in.
+              </p>
+              <div class="auth-verify-error__action">
+                <span v-if="resendSent" class="auth-resend-sent t-secondary">
+                  Verification email sent. Check your inbox.
+                </span>
+                <button
+                  v-else
+                  type="button"
+                  class="auth-resend-btn"
+                  :disabled="resendLoading"
+                  @click="handleResendVerification"
+                >
+                  {{ resendLoading ? 'Sending…' : 'Resend verification →' }}
+                </button>
+              </div>
+            </div>
           </div>
         </PiCard>
 
@@ -196,17 +279,9 @@ const VALUE_PROPS = [
           >{{ resuming ? 'Resuming…' : 'Resume session →' }}</button>
         </div>
 
-        <div v-if="forgotClicked" class="auth-forgot-note t-tertiary">
-          Password reset is coming soon.
-        </div>
-
         <div class="auth-switch-link">
           <span class="t-secondary">New here? </span>
           <router-link to="/register">Create an account</router-link>
-        </div>
-
-        <div class="auth-switch-link">
-          <a href="#" class="auth-text-link auth-text-link--muted" @click="handleForgot">Forgot password?</a>
         </div>
       </form>
     </div>
@@ -275,16 +350,26 @@ const VALUE_PROPS = [
 .auth-text-link {
   font-size: var(--text-sm);
   color: var(--accent-primary);
+  text-decoration: none;
 }
 .auth-text-link:hover { color: var(--accent-hover); }
 .auth-text-link--muted { color: var(--text-tertiary); }
 .auth-text-link--muted:hover { color: var(--text-secondary); }
+.auth-text-link--sm { font-size: var(--text-xs); }
 
 /* Mode toggle — absolute top-right of form panel */
 .auth-mode-toggle {
   position: absolute;
   top: var(--space-6);
   right: var(--space-6);
+}
+
+/* Password field: label + forgot link on same row */
+.auth-password-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
 }
 
 /* Card internals */
@@ -303,6 +388,64 @@ const VALUE_PROPS = [
 .auth-error-center {
   text-align: center;
 }
+
+/* Email-not-verified compound error block */
+.auth-verify-error {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.auth-verify-error__action {
+  text-align: center;
+}
+
+.auth-resend-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.auth-resend-btn:hover:not(:disabled) { color: var(--accent-hover); }
+.auth-resend-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.auth-resend-sent {
+  font-size: var(--text-sm);
+}
+
+/* Info/warning banner */
+.auth-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  flex-wrap: wrap;
+}
+.auth-banner--warning {
+  background: var(--warning-surface);
+  color: var(--warning);
+  border: 1px solid var(--warning);
+}
+.auth-banner__action {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--warning);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  margin-left: auto;
+}
+.auth-banner__action:hover { opacity: 0.8; }
 
 /* Divider between password login and OAuth */
 .auth-divider {
@@ -343,13 +486,6 @@ const VALUE_PROPS = [
 }
 .auth-resume__link:disabled { opacity: 0.4; cursor: not-allowed; }
 .auth-resume__link:hover:not(:disabled) { color: var(--accent-hover); }
-
-/* Forgot note */
-.auth-forgot-note {
-  font-size: var(--text-sm);
-  margin-top: var(--space-3);
-  text-align: center;
-}
 
 /* Bottom nav link */
 .auth-switch-link {

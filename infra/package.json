@@ -1,0 +1,23 @@
+{
+  "name": "private-internet-infra",
+  "version": "0.1.0",
+  "description": "AWS CDK v2 infrastructure for Private Internet (future migration target — NOT deployed)",
+  "main": "bin/private-internet.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "synth": "npx cdk synth",
+    "diff": "npx cdk diff",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "20.x",
+    "aws-cdk": "2.x",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.4.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.x",
+    "constructs": "^10.0.0"
+  }
+}

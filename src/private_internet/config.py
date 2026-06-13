@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     registration_open: bool = True    # False → invite-only (CLI-created accounts)
     max_users: int = 100              # 0 = unlimited
 
+    # Email verification. Default False so the current register→token flow keeps
+    # working until SES (a later phase) lands. Flip to True to gate login on a
+    # verified email and switch register to a "verification sent" response.
+    require_email_verification: bool = False
+    verification_token_ttl_hours: int = 24
+    reset_token_ttl_hours: int = 1
+
     db_host: str = "localhost"
     db_name: str = "postgres"
     db_user: str = "postgres"
