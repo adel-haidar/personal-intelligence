@@ -21,6 +21,7 @@ class ScriptSection:
     id: str
     text: str
     image_prompt: str
+    heading: str = ""  # short on-screen slide title (distinct per section)
 
 
 @dataclass
@@ -34,7 +35,7 @@ class VideoScript:
             "title": self.title,
             "description": self.description,
             "sections": [
-                {"id": s.id, "text": s.text, "image_prompt": s.image_prompt}
+                {"id": s.id, "text": s.text, "image_prompt": s.image_prompt, "heading": s.heading}
                 for s in self.sections
             ],
         })
@@ -68,6 +69,9 @@ class VideoScriptGenerator:
             "You are writing a narration script for a short video "
             "(90–120 seconds spoken at normal pace ≈ 150 words/minute, "
             "so target 225–300 words total).\n\n"
+            "Write the narration ENTIRELY in English — it is read aloud by an "
+            "English text-to-speech voice. Keep the persona's tone, but do not "
+            "include words or phrases in other languages.\n\n"
             "Structure EXACTLY:\n"
             "- INTRO (1 sentence hook, 15–20 words)\n"
             "- SECTION_1: first key point (60–80 words)\n"
@@ -80,14 +84,16 @@ class VideoScriptGenerator:
             "{\n"
             '  "title": str,\n'
             '  "sections": [\n'
-            '    {"id": "INTRO", "text": str, "image_prompt": str},\n'
-            '    {"id": "SECTION_1", "text": str, "image_prompt": str},\n'
-            '    {"id": "SECTION_2", "text": str, "image_prompt": str},\n'
-            '    {"id": "SECTION_3", "text": str, "image_prompt": str},\n'
-            '    {"id": "OUTRO", "text": str, "image_prompt": str}\n'
+            '    {"id": "INTRO", "heading": str, "text": str, "image_prompt": str},\n'
+            '    {"id": "SECTION_1", "heading": str, "text": str, "image_prompt": str},\n'
+            '    {"id": "SECTION_2", "heading": str, "text": str, "image_prompt": str},\n'
+            '    {"id": "SECTION_3", "heading": str, "text": str, "image_prompt": str},\n'
+            '    {"id": "OUTRO", "heading": str, "text": str, "image_prompt": str}\n'
             "  ],\n"
             '  "description": str\n'
             "}\n"
+            "heading is a punchy 2–5 word on-screen slide title that captures that "
+            "section's point (distinct per section). "
             "description is a 2-sentence video description. "
             "No preamble, no markdown fences."
         )
@@ -103,7 +109,12 @@ class VideoScriptGenerator:
         data = json.loads(_strip_markdown_fences(text))
 
         sections = [
-            ScriptSection(id=s["id"], text=s["text"], image_prompt=s["image_prompt"])
+            ScriptSection(
+                id=s["id"],
+                text=s["text"],
+                image_prompt=s["image_prompt"],
+                heading=s.get("heading", ""),
+            )
             for s in data["sections"]
         ]
         section_ids = [s.id for s in sections]
@@ -117,19 +128,33 @@ class VideoScriptGenerator:
         )
 
 
-def _fallback_slide(width: int, height: int, title: str, subtitle: str = "") -> bytes:
+# Per-section top-of-gradient colors so consecutive slides look distinct
+# (all dark + calm, bottom is always near-black). Keyed by section index.
+_SLIDE_TOP_COLORS = [
+    (28, 27, 46),   # indigo
+    (20, 34, 46),   # deep teal
+    (40, 24, 42),   # plum
+    (24, 30, 48),   # slate blue
+    (22, 38, 34),   # deep green
+]
+
+
+def _fallback_slide(
+    width: int, height: int, title: str, subtitle: str = "", variant: int = 0
+) -> bytes:
     """Render a calm gradient title-slide as PNG bytes.
 
     Used when no Bedrock image-generation model is available (every Amazon
     text-to-image model is retired and no Stability text-to-image model is
     invokable) so SIGNAL videos still render. Real AI images return
-    automatically the moment a generator is configured. PIL is imported lazily
-    so the module still imports on hosts without Pillow."""
+    automatically the moment a generator is configured. `variant` shifts the
+    gradient color so consecutive slides differ. PIL is imported lazily so the
+    module still imports on hosts without Pillow."""
     from io import BytesIO
     from PIL import Image, ImageDraw, ImageFont
 
-    # vertical gradient: indigo-slate -> near-black (the Calm Intelligence palette)
-    top, bottom = (28, 27, 46), (12, 12, 20)
+    # vertical gradient: a per-slide dark tint -> near-black (Calm Intelligence)
+    top, bottom = _SLIDE_TOP_COLORS[variant % len(_SLIDE_TOP_COLORS)], (12, 12, 20)
     column = Image.new("RGB", (1, height))
     for y in range(height):
         t = y / max(1, height - 1)
@@ -201,7 +226,7 @@ class VideoImageGenerator(PostImageGenerator):
     NEGATIVE_TEXT = "text, watermark, logo, people's faces, blurry"
 
     async def generate_for_section(
-        self, section: ScriptSection, creator: dict, title: str = ""
+        self, section: ScriptSection, creator: dict, title: str = "", index: int = 0
     ) -> bytes:
         prompt = section.image_prompt + " cinematic, 16:9, dark editorial style, no text"
         try:
@@ -216,8 +241,12 @@ class VideoImageGenerator(PostImageGenerator):
                 f"Slide image generation failed ({type(exc).__name__}); "
                 "using gradient fallback slide."
             )
-            caption = title or section.text[:60]
-            return _fallback_slide(VIDEO_WIDTH, VIDEO_HEIGHT, caption, creator.get("name", ""))
+            # Each slide gets its own heading + tint so the video doesn't look
+            # like one static frame.
+            caption = section.heading or title or section.text[:60]
+            return _fallback_slide(
+                VIDEO_WIDTH, VIDEO_HEIGHT, caption, creator.get("name", ""), variant=index
+            )
 
     async def generate_thumbnail(self, script: VideoScript, creator: dict) -> bytes:
         intro = script.sections[0]

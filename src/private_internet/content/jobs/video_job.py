@@ -111,7 +111,10 @@ async def generate_video(topic_id: str | None = None, *, user_id: str) -> str:
 
         # 5/6. Slide images (parallel) + thumbnail
         image_results = await asyncio.gather(
-            *(image_generator.generate_for_section(s, creator, title=script.title) for s in script.sections),
+            *(
+                image_generator.generate_for_section(s, creator, title=script.title, index=i)
+                for i, s in enumerate(script.sections)
+            ),
             image_generator.generate_thumbnail(script, creator),
         )
         section_images, thumbnail_bytes = image_results[:-1], image_results[-1]
