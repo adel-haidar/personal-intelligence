@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { registerWithPassword } from '../composables/useAuth'
+import BrainPulse from '../components/ui/BrainPulse.vue'
+import PiCard from '../components/ui/PiCard.vue'
+import PiInput from '../components/ui/PiInput.vue'
+import PiButton from '../components/ui/PiButton.vue'
+import ModeToggle from '../components/ui/ModeToggle.vue'
 
 const router = useRouter()
 
@@ -14,6 +19,27 @@ const referralSource = ref('')
 const loading        = ref(false)
 const error          = ref('')
 const fieldErrors    = ref<Record<string, string>>({})
+
+// Password strength: 3 dots — amber at ≥6/≥12, all green at ≥16
+const strength = computed<number>(() => {
+  const l = password.value.length
+  if (l >= 16) return 3
+  if (l >= 12) return 2
+  if (l >= 6) return 1
+  return 0
+})
+
+function dotColor(i: number): string {
+  if (i < strength.value) {
+    return strength.value === 3 ? 'var(--success)' : 'var(--brain-amber)'
+  }
+  return 'var(--border-medium)'
+}
+
+// Inline confirm-mismatch error (shown without needing submit)
+const confirmMismatch = computed(() =>
+  confirmPass.value.length > 0 && confirmPass.value !== password.value
+)
 
 function validate(): boolean {
   const errs: Record<string, string> = {}
@@ -68,245 +94,193 @@ async function handleRegister() {
 </script>
 
 <template>
-  <div class="register">
-    <div class="panel">
-      <span class="br tl"></span>
-      <span class="br tr"></span>
-      <span class="br bl"></span>
-      <span class="br br2"></span>
+  <div class="pi-auth pi-auth--single">
+    <div class="auth-mode-toggle">
+      <ModeToggle :withLabel="false" />
+    </div>
 
-      <div class="brand">PRIVATE-INTERNET</div>
-      <div class="rule" />
+    <form style="width: 100%; max-width: 480px;" @submit.prevent="handleRegister" novalidate>
+      <!-- Header -->
+      <div class="reg-header">
+        <div class="reg-logo-wrap">
+          <BrainPulse :size="48" :slow="true" aria-hidden="true" />
+        </div>
+        <h1 class="reg-title">Create your account</h1>
+      </div>
 
-      <div class="body">
-        <div class="access-label mono">NEW ACCOUNT REGISTRATION</div>
-
-        <form class="form" @submit.prevent="handleRegister" novalidate>
-          <div class="field">
-            <label class="field-label mono" for="email">EMAIL ADDRESS</label>
-            <input
-              id="email"
-              v-model="email"
-              type="email"
-              class="field-input mono"
-              :class="{ 'field-input--error': fieldErrors.email }"
-              autocomplete="email"
-              placeholder="user@domain.tld"
-              :disabled="loading"
-            />
-            <span v-if="fieldErrors.email" class="field-error mono">{{ fieldErrors.email }}</span>
-          </div>
-
-          <div class="field">
-            <label class="field-label mono" for="display-name">DISPLAY NAME</label>
-            <input
-              id="display-name"
+      <PiCard>
+        <div class="reg-fields">
+          <!-- Display name -->
+          <div class="pi-field">
+            <label class="pi-label" for="reg-display-name">Display name</label>
+            <PiInput
+              id="reg-display-name"
               v-model="displayName"
               type="text"
-              class="field-input mono"
-              :class="{ 'field-input--error': fieldErrors.displayName }"
+              placeholder="Adel Haidar"
               autocomplete="nickname"
-              placeholder="Your name"
               :disabled="loading"
+              :error="fieldErrors.displayName"
             />
-            <span v-if="fieldErrors.displayName" class="field-error mono">{{ fieldErrors.displayName }}</span>
+            <p v-if="!fieldErrors.displayName" class="pi-field__hint">
+              Shown throughout the app — not a username.
+            </p>
+            <p v-if="fieldErrors.displayName" class="pi-field__error" role="alert">
+              {{ fieldErrors.displayName }}
+            </p>
           </div>
 
-          <div class="field">
-            <label class="field-label mono" for="password">PASSWORD</label>
-            <input
-              id="password"
+          <!-- Email -->
+          <div class="pi-field">
+            <label class="pi-label" for="reg-email">Email</label>
+            <PiInput
+              id="reg-email"
+              v-model="email"
+              type="email"
+              placeholder="you@yourserver.com"
+              autocomplete="email"
+              :disabled="loading"
+              :error="fieldErrors.email"
+            />
+            <p v-if="fieldErrors.email" class="pi-field__error" role="alert">
+              {{ fieldErrors.email }}
+            </p>
+          </div>
+
+          <!-- Password + strength meter -->
+          <div class="pi-field">
+            <label class="pi-label" for="reg-password">Password</label>
+            <PiInput
+              id="reg-password"
               v-model="password"
               type="password"
-              class="field-input mono"
-              :class="{ 'field-input--error': fieldErrors.password }"
+              placeholder="••••••••••••"
               autocomplete="new-password"
-              placeholder="Minimum 12 characters"
               :disabled="loading"
+              :error="fieldErrors.password"
             />
-            <span v-if="fieldErrors.password" class="field-error mono">{{ fieldErrors.password }}</span>
+            <!-- 3-dot strength meter -->
+            <div class="reg-strength" aria-hidden="true">
+              <span
+                v-for="i in [0, 1, 2]"
+                :key="i"
+                class="reg-strength__dot"
+                :style="{ background: dotColor(i) }"
+              />
+            </div>
+            <p v-if="fieldErrors.password" class="pi-field__error" role="alert">
+              {{ fieldErrors.password }}
+            </p>
+            <p v-else class="pi-field__hint">At least 12 characters.</p>
           </div>
 
-          <div class="field">
-            <label class="field-label mono" for="confirm-pass">CONFIRM PASSWORD</label>
-            <input
-              id="confirm-pass"
+          <!-- Confirm password -->
+          <div class="pi-field">
+            <label class="pi-label" for="reg-confirm">Confirm password</label>
+            <PiInput
+              id="reg-confirm"
               v-model="confirmPass"
               type="password"
-              class="field-input mono"
-              :class="{ 'field-input--error': fieldErrors.confirmPass }"
+              placeholder="••••••••••••"
               autocomplete="new-password"
-              placeholder="Repeat password"
               :disabled="loading"
+              :error="confirmMismatch || !!fieldErrors.confirmPass ? 'error' : ''"
             />
-            <span v-if="fieldErrors.confirmPass" class="field-error mono">{{ fieldErrors.confirmPass }}</span>
+            <p
+              v-if="confirmMismatch || fieldErrors.confirmPass"
+              class="pi-field__error"
+              role="alert"
+            >
+              {{ fieldErrors.confirmPass || 'Passwords do not match.' }}
+            </p>
           </div>
 
-          <div class="field">
-            <label class="field-label mono" for="referral">HOW DID YOU HEAR ABOUT PRIVATE INTERNET? <span class="optional">(OPTIONAL)</span></label>
-            <textarea
-              id="referral"
-              v-model="referralSource"
-              class="field-textarea mono"
-              rows="3"
-              placeholder="e.g. a friend, Twitter/X, Hacker News…"
-              :disabled="loading"
-            />
-          </div>
+          <!-- CTA — spinner in place of label while loading -->
+          <PiButton variant="cta" :block="true" :loading="loading" type="submit">
+            Create account
+          </PiButton>
 
-          <button
-            type="submit"
-            class="btn btn-primary submit-btn"
-            :disabled="loading"
-          >
-            {{ loading ? 'REGISTERING...' : 'CREATE ACCOUNT' }}
-          </button>
-        </form>
-
-        <div v-if="error" class="error-row mono">{{ error }}</div>
-
-        <div class="login-row mono">
-          Already have an account?
-          <router-link to="/login" class="nav-link">Log in →</router-link>
+          <!-- Server error -->
+          <p v-if="error" class="pi-field__error reg-error-center" role="alert">
+            {{ error }}
+          </p>
         </div>
+      </PiCard>
+
+      <p class="reg-privacy t-secondary">
+        By creating an account, your data stays on this server. We have no access to it.
+      </p>
+
+      <div class="reg-sign-in-link">
+        <span class="t-secondary">Already have an account? </span>
+        <router-link to="/login">Sign in →</router-link>
       </div>
-    </div>
+    </form>
   </div>
 </template>
 
 <style scoped>
-.register {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  background: var(--bg-base);
-  padding: 32px;
+/* Mode toggle — absolute top-right */
+.auth-mode-toggle {
+  position: absolute;
+  top: var(--space-6);
+  right: var(--space-6);
 }
 
-.panel {
-  width: min(480px, 100%);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  position: relative;
+/* Header above the card */
+.reg-header {
+  text-align: center;
+  margin-bottom: var(--space-6);
 }
 
-/* corner brackets */
-.br { position: absolute; width: 10px; height: 10px; }
-.br.tl  { top: -1px;    left: -1px;  border-top:    1px solid var(--accent); border-left:  1px solid var(--accent); }
-.br.tr  { top: -1px;    right: -1px; border-top:    1px solid var(--accent); border-right: 1px solid var(--accent); }
-.br.bl  { bottom: -1px; left: -1px;  border-bottom: 1px solid var(--accent); border-left:  1px solid var(--accent); }
-.br.br2 { bottom: -1px; right: -1px; border-bottom: 1px solid var(--accent); border-right: 1px solid var(--accent); }
-
-.brand {
-  padding: 22px 28px 20px;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.2em;
-  color: var(--text-1);
-  text-transform: uppercase;
+.reg-logo-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-4);
 }
 
-.rule {
-  height: 1px;
-  background: var(--border);
+.reg-title {
+  font-size: var(--text-xl);
 }
 
-.body {
-  padding: 28px 28px 32px;
+/* Fields inside card */
+.reg-fields {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--space-4);
 }
 
-.access-label {
-  font-size: 9px;
-  letter-spacing: 0.18em;
-  color: var(--text-3);
-  text-transform: uppercase;
-}
-
-/* ---- form ---- */
-.form {
+/* 3-dot strength meter */
+.reg-strength {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  gap: 6px;
+  margin-top: var(--space-2);
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+.reg-strength__dot {
+  width: 28px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  transition: background 0.2s var(--ease);
 }
 
-.field-label {
-  font-size: 9px;
-  letter-spacing: 0.18em;
-  color: var(--text-3);
-  text-transform: uppercase;
+/* Server-level error */
+.reg-error-center {
+  text-align: center;
 }
 
-.optional {
-  color: var(--text-3);
-  opacity: 0.6;
+/* Privacy note */
+.reg-privacy {
+  font-size: var(--text-sm);
+  text-align: center;
+  margin-top: var(--space-4);
+  line-height: 1.6;
 }
 
-.field-input,
-.field-textarea {
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  padding: 8px 10px;
-  outline: none;
-  transition: border-color 0.12s;
-  border-radius: 0;
-  width: 100%;
+/* Sign in link */
+.reg-sign-in-link {
+  text-align: center;
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
 }
-.field-textarea {
-  resize: vertical;
-  min-height: 68px;
-  line-height: 1.5;
-}
-.field-input::placeholder,
-.field-textarea::placeholder { color: var(--text-3); }
-.field-input:focus,
-.field-textarea:focus { border-color: var(--accent); }
-.field-input:disabled,
-.field-textarea:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.field-input--error { border-color: var(--danger) !important; }
-
-.field-error {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  color: var(--danger);
-}
-
-.submit-btn { width: 100%; margin-top: 4px; }
-.submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* ---- error ---- */
-.error-row {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--danger);
-  border: 1px solid var(--danger);
-  padding: 8px 10px;
-  background: rgba(122, 58, 58, 0.08);
-}
-
-/* ---- login link ---- */
-.login-row {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
-}
-.nav-link {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  margin-left: 4px;
-}
-.nav-link:hover { color: #7fb0cf; }
 </style>

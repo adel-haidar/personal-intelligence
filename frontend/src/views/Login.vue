@@ -8,6 +8,12 @@ import {
   isAuthenticated,
   loginWithPassword,
 } from '../composables/useAuth'
+import BrainPulse from '../components/ui/BrainPulse.vue'
+import PiCard from '../components/ui/PiCard.vue'
+import PiInput from '../components/ui/PiInput.vue'
+import PiButton from '../components/ui/PiButton.vue'
+import ModeToggle from '../components/ui/ModeToggle.vue'
+import PIIcon from '../components/ui/PIIcon.vue'
 
 const router  = useRouter()
 const vRoute  = useRoute()
@@ -76,287 +82,279 @@ function handleForgot(e: Event) {
   e.preventDefault()
   forgotClicked.value = true
 }
+
+const VALUE_PROPS = [
+  'Everything learns from your private memory',
+  'No ads. No tracking. No corporate servers.',
+  'The more you share, the smarter it gets.',
+]
 </script>
 
 <template>
-  <div class="login">
-    <div class="panel">
-      <span class="br tl"></span>
-      <span class="br tr"></span>
-      <span class="br bl"></span>
-      <span class="br br2"></span>
-
-      <div class="brand">PRIVATE-INTERNET</div>
-      <div class="rule" />
-
-      <div class="body">
-        <div class="access-label mono">CREDENTIAL ACCESS</div>
-
-        <form class="form" @submit.prevent="handleLogin" novalidate>
-          <div class="field">
-            <label class="field-label mono" for="email">EMAIL ADDRESS</label>
-            <input
-              id="email"
-              v-model="email"
-              type="email"
-              class="field-input mono"
-              autocomplete="email"
-              placeholder="user@domain.tld"
-              :disabled="loading"
-            />
-          </div>
-
-          <div class="field">
-            <label class="field-label mono" for="password">PASSWORD</label>
-            <input
-              id="password"
-              v-model="password"
-              type="password"
-              class="field-input mono"
-              autocomplete="current-password"
-              placeholder="••••••••••••"
-              :disabled="loading"
-            />
-          </div>
-
-          <div class="form-actions">
-            <button
-              type="submit"
-              class="btn btn-primary"
-              :disabled="loading"
-            >
-              {{ loading ? 'AUTHENTICATING...' : 'LOG IN' }}
-            </button>
-
-            <a
-              href="#"
-              class="forgot-link mono"
-              @click="handleForgot"
-            >Forgot password</a>
-          </div>
-
-          <p v-if="forgotClicked" class="forgot-note mono">
-            Password reset — coming soon.
-          </p>
-        </form>
-
-        <div v-if="error" class="error-row mono">{{ error }}</div>
-
-        <div class="divider">
-          <span class="divider-line"></span>
-          <span class="divider-label mono">OR</span>
-          <span class="divider-line"></span>
+  <div class="pi-auth">
+    <!-- Left: identity / brand panel -->
+    <div class="pi-auth__brand">
+      <div class="auth-brand-inner">
+        <div class="auth-logo-wrap">
+          <BrainPulse :size="64" :slow="true" aria-hidden="true" />
         </div>
+        <h1 class="auth-product-name">Private Internet</h1>
+        <p class="auth-tagline t-serif">Your AI. Your server. Your rules.</p>
 
-        <div class="oauth-row">
-          <button
-            class="btn btn-secondary oauth-btn"
-            :disabled="oauthLoading || resuming"
-            @click="handleOAuth"
-          >
-            {{ oauthLoading ? 'REDIRECTING...' : 'AUTHENTICATE VIA OAUTH 2.1' }}
-          </button>
-        </div>
+        <ul class="auth-value-props" role="list">
+          <li v-for="(prop, i) in VALUE_PROPS" :key="i" class="auth-value-prop">
+            <span class="auth-check-icon" aria-hidden="true">
+              <PIIcon name="check" :size="16" />
+            </span>
+            <span>{{ prop }}</span>
+          </li>
+        </ul>
 
-        <div v-if="hasSession" class="resume-row">
-          <span class="resume-text mono">Session token found.</span>
-          <button
-            class="resume-link mono"
-            :disabled="resuming"
-            @click="handleResume"
-          >{{ resuming ? 'RESUMING...' : 'Resume session →' }}</button>
-        </div>
-
-        <div class="register-row mono">
-          No account?
-          <router-link to="/register" class="nav-link">Create one →</router-link>
+        <div class="auth-brand-links">
+          <router-link to="/about" class="auth-text-link">How it works</router-link>
+          <span class="t-tertiary" aria-hidden="true">·</span>
+          <a
+            href="https://github.com/personal-intelligence"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="auth-text-link"
+          >View on GitHub</a>
         </div>
       </div>
+    </div>
+
+    <!-- Right: sign-in form -->
+    <div class="pi-auth__form">
+      <div class="auth-mode-toggle">
+        <ModeToggle :withLabel="false" />
+      </div>
+
+      <form style="width: 100%; max-width: 360px;" @submit.prevent="handleLogin" novalidate>
+        <PiCard>
+          <h2 class="auth-card-title">Sign in</h2>
+
+          <div class="auth-fields">
+            <div class="pi-field">
+              <label class="pi-label" for="login-email">Email</label>
+              <PiInput
+                id="login-email"
+                v-model="email"
+                type="email"
+                placeholder="you@yourserver.com"
+                autocomplete="email"
+                :disabled="loading"
+              />
+            </div>
+
+            <div class="pi-field">
+              <label class="pi-label" for="login-password">Password</label>
+              <PiInput
+                id="login-password"
+                v-model="password"
+                type="password"
+                placeholder="••••••••••••"
+                autocomplete="current-password"
+                :disabled="loading"
+              />
+            </div>
+
+            <PiButton variant="cta" :block="true" :loading="loading" type="submit">
+              Sign in
+            </PiButton>
+
+            <p v-if="error" class="pi-field__error auth-error-center" role="alert">
+              {{ error }}
+            </p>
+          </div>
+        </PiCard>
+
+        <!-- OAuth / secondary auth -->
+        <div class="auth-divider" aria-hidden="true">
+          <span class="auth-divider__line" />
+          <span class="auth-divider__label t-tertiary">or</span>
+          <span class="auth-divider__line" />
+        </div>
+
+        <PiButton
+          variant="secondary"
+          :block="true"
+          :loading="oauthLoading"
+          :disabled="resuming"
+          type="button"
+          @click="handleOAuth"
+        >
+          Continue with OAuth 2.1
+        </PiButton>
+
+        <div v-if="hasSession" class="auth-resume">
+          <span class="auth-resume__text t-tertiary">Session token found.</span>
+          <button
+            type="button"
+            class="auth-resume__link"
+            :disabled="resuming"
+            @click="handleResume"
+          >{{ resuming ? 'Resuming…' : 'Resume session →' }}</button>
+        </div>
+
+        <div v-if="forgotClicked" class="auth-forgot-note t-tertiary">
+          Password reset is coming soon.
+        </div>
+
+        <div class="auth-switch-link">
+          <span class="t-secondary">New here? </span>
+          <router-link to="/register">Create an account</router-link>
+        </div>
+
+        <div class="auth-switch-link">
+          <a href="#" class="auth-text-link auth-text-link--muted" @click="handleForgot">Forgot password?</a>
+        </div>
+      </form>
     </div>
   </div>
 </template>
 
 <style scoped>
-.login {
-  height: 100vh;
-  display: grid;
-  place-items: center;
-  background: var(--bg-base);
-  padding: 32px;
-}
-
-.panel {
-  width: min(460px, 100%);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  position: relative;
-}
-
-/* corner brackets */
-.br { position: absolute; width: 10px; height: 10px; }
-.br.tl  { top: -1px;    left: -1px;  border-top:    1px solid var(--accent); border-left:  1px solid var(--accent); }
-.br.tr  { top: -1px;    right: -1px; border-top:    1px solid var(--accent); border-right: 1px solid var(--accent); }
-.br.bl  { bottom: -1px; left: -1px;  border-bottom: 1px solid var(--accent); border-left:  1px solid var(--accent); }
-.br.br2 { bottom: -1px; right: -1px; border-bottom: 1px solid var(--accent); border-right: 1px solid var(--accent); }
-
-.brand {
-  padding: 22px 28px 20px;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.2em;
-  color: var(--text-1);
-  text-transform: uppercase;
-}
-
-.rule {
-  height: 1px;
-  background: var(--border);
-}
-
-.body {
-  padding: 28px 28px 32px;
+/* Brand panel inner layout */
+.auth-brand-inner {
+  max-width: 380px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  align-items: center;
 }
 
-.access-label {
-  font-size: 9px;
-  letter-spacing: 0.18em;
-  color: var(--text-3);
-  text-transform: uppercase;
+.auth-logo-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-5);
 }
 
-/* ---- form ---- */
-.form {
+.auth-product-name {
+  font-size: var(--text-xl);
+  text-align: center;
+  margin-bottom: var(--space-2);
+}
+
+.auth-tagline {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  font-style: italic;
+  margin-bottom: var(--space-8);
+}
+
+/* Value props list */
+.auth-value-props {
+  list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.field-label {
-  font-size: 9px;
-  letter-spacing: 0.18em;
-  color: var(--text-3);
-  text-transform: uppercase;
-}
-
-.field-input {
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  padding: 8px 10px;
-  outline: none;
-  transition: border-color 0.12s;
-  border-radius: 0;
+  gap: var(--space-4);
   width: 100%;
+  margin-bottom: var(--space-8);
 }
-.field-input::placeholder { color: var(--text-3); }
-.field-input:focus { border-color: var(--accent); }
-.field-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.form-actions {
+.auth-value-prop {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  font-size: var(--text-base);
+}
+
+.auth-check-icon {
+  color: var(--brain-amber);
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.auth-brand-links {
+  display: flex;
+  gap: var(--space-4);
+  justify-content: center;
+  align-items: center;
+}
+
+.auth-text-link {
+  font-size: var(--text-sm);
+  color: var(--accent-primary);
+}
+.auth-text-link:hover { color: var(--accent-hover); }
+.auth-text-link--muted { color: var(--text-tertiary); }
+.auth-text-link--muted:hover { color: var(--text-secondary); }
+
+/* Mode toggle — absolute top-right of form panel */
+.auth-mode-toggle {
+  position: absolute;
+  top: var(--space-6);
+  right: var(--space-6);
+}
+
+/* Card internals */
+.auth-card-title {
+  font-size: var(--text-md);
+  margin-bottom: var(--space-5);
+}
+
+.auth-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Error below CTA */
+.auth-error-center {
+  text-align: center;
+}
+
+/* Divider between password login and OAuth */
+.auth-divider {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-top: 2px;
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
 }
-
-.forgot-link {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-.forgot-link:hover { color: var(--text-2); }
-
-.forgot-note {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-base);
-}
-
-/* ---- divider ---- */
-.divider {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.divider-line {
+.auth-divider__line {
   flex: 1;
   height: 1px;
-  background: var(--border);
+  background: var(--border-subtle);
 }
-.divider-label {
-  font-size: 9px;
-  letter-spacing: 0.18em;
-  color: var(--text-3);
+.auth-divider__label {
+  font-size: var(--text-xs);
 }
 
-/* ---- oauth ---- */
-.oauth-btn { font-size: 11px; width: 100%; }
-.oauth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* ---- session resume ---- */
-.resume-row {
+/* Session resume row */
+.auth-resume {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
+  margin-top: var(--space-3);
 }
-.resume-text {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
+.auth-resume__text {
+  font-size: var(--text-sm);
 }
-.resume-link {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--accent);
-  background: transparent;
+.auth-resume__link {
+  font-size: var(--text-sm);
+  color: var(--accent-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  padding: 0;
+  background: none;
   border: none;
   cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
-.resume-link:hover { color: #7fb0cf; }
-.resume-link:disabled { opacity: 0.4; cursor: not-allowed; }
+.auth-resume__link:disabled { opacity: 0.4; cursor: not-allowed; }
+.auth-resume__link:hover:not(:disabled) { color: var(--accent-hover); }
 
-/* ---- register link ---- */
-.register-row {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
+/* Forgot note */
+.auth-forgot-note {
+  font-size: var(--text-sm);
+  margin-top: var(--space-3);
+  text-align: center;
 }
-.nav-link {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  margin-left: 4px;
-}
-.nav-link:hover { color: #7fb0cf; }
 
-/* ---- error ---- */
-.error-row {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--danger);
-  border: 1px solid var(--danger);
-  padding: 8px 10px;
-  background: rgba(122, 58, 58, 0.08);
+/* Bottom nav link */
+.auth-switch-link {
+  text-align: center;
+  margin-top: var(--space-4);
+  font-size: var(--text-sm);
 }
 </style>

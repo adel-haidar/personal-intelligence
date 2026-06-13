@@ -212,6 +212,34 @@
 .pi-rule { height: 1px; background: var(--border-subtle); border: 0; margin: var(--space-4) 0; }
 
 /* ============================================================================
+   AUTH LAYOUT — ported from pi-shell.css
+   ============================================================================ */
+
+/* Two-column: left brand panel + right form panel */
+.pi-auth { display: grid; grid-template-columns: 1fr 1fr; min-height: 100vh; }
+.pi-auth__brand {
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--space-12);
+  background: var(--background-surface); border-right: 1px solid var(--border-subtle);
+}
+.pi-auth__form {
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--space-12); position: relative;
+}
+/* Single-column centered card (register) */
+.pi-auth--single {
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--space-12); position: relative; min-height: 100vh;
+}
+
+/* Responsive: collapse brand col on mobile */
+@media (max-width: 768px) {
+  .pi-auth { grid-template-columns: 1fr; }
+  .pi-auth__brand { display: none; }
+  .pi-auth--single { padding: var(--space-6) var(--space-4); align-items: flex-start; padding-top: var(--space-12); }
+}
+
+/* ============================================================================
    APP SHELL — sidebar, layout, responsive (ported from pi-shell.css)
    ============================================================================ */
 .pi-app { min-height: 100vh; }
