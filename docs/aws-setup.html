@@ -93,7 +93,8 @@
       content generation. Work top to bottom; tick items as you go (your progress is saved in this browser).</p>
     <div class="meta">
       <span class="pill">Region: eu-central-1</span>
-      <span class="pill">Content models: eu-west-1</span>
+      <span class="pill">Text: eu-central-1</span>
+      <span class="pill">Nova: eu-west-1</span>
       <span class="pill">.env: ~/personal-intelligence/.env</span>
       <span class="pill amber">Restart after .env edits</span>
     </div>
@@ -152,10 +153,11 @@ cd ~/personal-intelligence</pre>
       <tr><td><code>GEMINI_API_KEY</code></td><td>Topic research (web-grounded) for PULSE/SIGNAL.</td><td>From section 5</td></tr>
       <tr><td><code>S3_CONTENT_BUCKET</code></td><td>Where generated images/videos are stored.</td><td>From section 3</td></tr>
       <tr><td><code>CLOUDFRONT_BASE_URL</code></td><td>How those assets are served.</td><td>From section 3</td></tr>
-      <tr><td><code>BEDROCK_HAIKU_MODEL_ID</code></td><td>Text generation (posts, scripts).</td><td><code>anthropic.claude-3-haiku-20240307-v1:0</code></td></tr>
+      <tr><td><code>BEDROCK_TEXT_MODEL_ID</code></td><td>Primary text model (posts, scripts, topics) — Mistral Small.</td><td><code>mistral.mistral-small-2402-v1:0</code></td></tr>
       <tr><td><code>NOVA_CANVAS_MODEL_ID</code></td><td>Image generation.</td><td><code>amazon.nova-canvas-v1:0</code></td></tr>
-      <tr><td><code>BEDROCK_TEXT_REGION</code></td><td>Region for Haiku/Nova text (NOT in eu-central-1). Defaults to the image region.</td><td><code>eu-west-1</code></td></tr>
-      <tr><td><code>BEDROCK_IMAGE_REGION</code></td><td>Nova Canvas isn't in eu-central-1.</td><td><code>eu-west-1</code></td></tr>
+      <tr><td><code>BEDROCK_TEXT_REGION</code></td><td>Region for the text model (Mistral Small). Defaults to eu-central-1.</td><td><code>eu-central-1</code></td></tr>
+      <tr><td><code>BEDROCK_MODEL_ID</code></td><td>Nova text fallback (used if the primary text model errors).</td><td><code>eu.amazon.nova-2-lite-v1:0</code></td></tr>
+      <tr><td><code>BEDROCK_IMAGE_REGION</code></td><td>Where the Nova models run (Canvas + text fallback).</td><td><code>eu-west-1</code></td></tr>
       <tr><td><code>REGISTRATION_OPEN</code> / <code>MAX_USERS</code></td><td>Who can sign up.</td><td><code>true</code> / <code>100</code></td></tr>
     </table>
     <div class="step">
@@ -174,9 +176,10 @@ nano ~/personal-intelligence/.env</pre>
 GEMINI_API_KEY=
 S3_CONTENT_BUCKET=personal-intelligence-content
 CLOUDFRONT_BASE_URL=https://dXXXXXXXX.cloudfront.net
-BEDROCK_HAIKU_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
+BEDROCK_TEXT_MODEL_ID=mistral.mistral-small-2402-v1:0
+BEDROCK_TEXT_REGION=eu-central-1
+BEDROCK_MODEL_ID=eu.amazon.nova-2-lite-v1:0
 NOVA_CANVAS_MODEL_ID=amazon.nova-canvas-v1:0
-BEDROCK_TEXT_REGION=eu-west-1
 BEDROCK_IMAGE_REGION=eu-west-1
 REGISTRATION_OPEN=true
 MAX_USERS=100</pre>
@@ -189,24 +192,29 @@ MAX_USERS=100</pre>
 
   <!-- 2 -->
   <h2 id="bedrock">2 · Enable Bedrock model access <span class="badge b-todo">console</span></h2>
-  <p class="sub">All content generation models go in <strong>one region</strong> (eu-west-1 recommended).</p>
+  <p class="sub">Text runs on <strong>Mistral Small in eu-central-1</strong>; the <strong>Nova</strong> models run in <strong>eu-west-1</strong>.</p>
   <div class="card">
-    <div class="note"><strong>eu-central-1 (Frankfurt) has none of the content models</strong> — not
-      Claude Haiku, not Nova text, not Nova Canvas. So enable them all in <strong>eu-west-1</strong>
-      (the region you already use for images). Embeddings (Titan) and Polly stay in eu-central-1,
-      where they work.</div>
+    <div class="note">eu-central-1 doesn't offer Claude Haiku or Nova, so text generation uses
+      <strong>Mistral Small</strong> (which <em>is</em> in eu-central-1), and the <strong>Nova</strong>
+      models — Nova Canvas (images) and the Nova text fallback — run in <strong>eu-west-1</strong>.
+      Embeddings (Titan) and Polly stay in eu-central-1.</div>
     <div class="step">
-      <span class="n"><input type="checkbox" class="chk" data-id="bedrock-ew"></span>
+      <span class="n"><input type="checkbox" class="chk" data-id="bedrock-text"></span>
+      <div class="body">
+        <div class="where">AWS console · Bedrock · eu-central-1</div>
+        <h3>Enable Mistral Small (text) in Frankfurt</h3>
+        <p>Bedrock → <em>Model access</em> → enable <strong>Mistral — Mistral Small</strong>
+           (<code>mistral.mistral-small-2402-v1:0</code>). Used for posts, video scripts, and topic extraction.</p>
+      </div>
+    </div>
+    <div class="step">
+      <span class="n"><input type="checkbox" class="chk" data-id="bedrock-nova"></span>
       <div class="body">
         <div class="where">AWS console · Bedrock · eu-west-1</div>
-        <h3>Request access in Ireland (eu-west-1) for all three</h3>
-        <p>Switch region to <strong>eu-west-1</strong> (top-right) → <em>Model access</em> → enable:</p>
-        <p>• <strong>Anthropic — Claude 3 Haiku</strong> (post / video-script text)<br>
-           • <strong>Amazon — Nova</strong> text model (topic extraction)<br>
-           • <strong>Amazon — Nova Canvas</strong> (images)</p>
-        <div class="note">If eu-west-1 happens not to offer Haiku/Nova in your account, pick a region
-          that does (e.g. us-east-1) and set <code>BEDROCK_TEXT_REGION</code> /
-          <code>BEDROCK_IMAGE_REGION</code> to it in section 1.</div>
+        <h3>Enable the Nova models in Ireland</h3>
+        <p>Switch region to <strong>eu-west-1</strong> (top-right) → Model access → enable:</p>
+        <p>• <strong>Amazon — Nova Canvas</strong> (images)<br>
+           • <strong>Amazon — Nova</strong> lite (text fallback)</p>
       </div>
     </div>
   </div>

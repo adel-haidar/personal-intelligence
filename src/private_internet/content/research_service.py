@@ -146,7 +146,7 @@ class WebResearchService:
         )
 
         settings = get_settings()
-        model_id = os.getenv("BEDROCK_HAIKU_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
+        model_id = os.getenv("BEDROCK_TEXT_MODEL_ID", "mistral.mistral-small-2402-v1:0")
         
         loop = asyncio.get_event_loop()
         
