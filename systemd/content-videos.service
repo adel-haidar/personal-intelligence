@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh topics + generate SIGNAL videos for all users
+After=network.target personal-intelligence-api.service
+Wants=personal-intelligence-api.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/home/ec2-user/personal-intelligence/.env
+# Refresh the topic pool from new memories, then generate videos. Both async
+# (HTTP 202), fanned over all onboarded users; same-host auth via INTERNAL_SECRET.
+# The sleep lets the topic refresh progress first. Default 1 video/user per run.
+ExecStart=/bin/sh -c 'curl -sS -o /dev/null -w "topics=%%{http_code} " -X POST -H "X-Internal-Secret: $INTERNAL_SECRET" http://127.0.0.1:8000/api/content/jobs/topics/run; echo'
+ExecStart=/bin/sh -c 'sleep 120'
+ExecStart=/bin/sh -c 'curl -sS -o /dev/null -w "videos=%%{http_code} " -X POST -H "X-Internal-Secret: $INTERNAL_SECRET" http://127.0.0.1:8000/api/content/jobs/videos/run; echo'
