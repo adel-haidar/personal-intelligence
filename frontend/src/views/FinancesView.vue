@@ -4,13 +4,18 @@ import PageHead from '../components/ui/PageHead.vue'
 import PiCard from '../components/ui/PiCard.vue'
 import PiButton from '../components/ui/PiButton.vue'
 import PIIcon from '../components/ui/PIIcon.vue'
+import Pills from '../components/ui/Pills.vue'
 import UploadBanner from '../components/ui/UploadBanner.vue'
 import InsightCard from '../components/ui/InsightCard.vue'
 import StatusPill from '../components/ui/StatusPill.vue'
 import SpendBar, { type SpendSegment } from '../components/ui/SpendBar.vue'
 import ProgressBar from '../components/ui/ProgressBar.vue'
 import ConfirmModal from '../components/ui/ConfirmModal.vue'
-import { useBankAdviser } from '../composables/useBankAdviser'
+import PeriodControls from '../components/finances/PeriodControls.vue'
+import SpendingBudgetPanel from '../components/finances/SpendingBudgetPanel.vue'
+import InvestingPanel from '../components/finances/InvestingPanel.vue'
+import DayTradingPanel from '../components/finances/DayTradingPanel.vue'
+import { useBankAdviser, type AnalysisParams } from '../composables/useBankAdviser'
 import { requireAuth } from '../composables/useAuth'
 import { API_BASE } from '../config/env'
 import { useToast } from '../components/ui/useToast'
@@ -20,21 +25,26 @@ const toast = useToast()
 
 onMounted(() => loadLatest())
 
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+const TABS = [
+  { value: 'overview',    label: 'Overview' },
+  { value: 'spending',    label: 'Spending & budget' },
+  { value: 'investments', label: 'Investments' },
+  { value: 'trading',     label: 'Day trading' },
+]
+const activeTab = ref<'overview' | 'spending' | 'investments' | 'trading'>('overview')
+
 const populated = computed(() => status.value === 'success' && !!result.value)
 const SAVINGS_TARGET = 20
 
-// ── Currency ──────────────────────────────────────────────────────────────────
+// ── Currency / formatting ─────────────────────────────────────────────────────
 const CURRENCY_SYMBOL: Record<string, string> = { EUR: '€', USD: '$', GBP: '£', CHF: 'CHF ' }
 const sym = computed(() => CURRENCY_SYMBOL[result.value?.meta.currency ?? 'EUR'] ?? `${result.value?.meta.currency ?? ''} `)
 function money(v: number): string { return `${sym.value}${Math.round(Math.abs(v)).toLocaleString()}` }
+function prettyCategory(name: string): string { return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) }
 
-function prettyCategory(name: string): string {
-  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-}
-
-// ── Spend breakdown ─────────────────────────────────────────────────────────
+// ── Overview: spend breakdown ─────────────────────────────────────────────────
 const SEG_COLORS = ['var(--accent-primary)', 'var(--success)', 'var(--brain-amber)', 'var(--border-strong)']
-
 const spendSegments = computed<SpendSegment[]>(() => {
   const sa = result.value?.spending_analysis
   if (!sa) return []
@@ -50,33 +60,26 @@ const spendSegments = computed<SpendSegment[]>(() => {
   if (restActual > 0) segs.push({ label: 'Other', pct: Math.round((restActual / total) * 100), color: SEG_COLORS[3] })
   return segs
 })
-
 const monthDelta = computed<number | null>(() => {
   const mom = result.value?.spending_analysis.month_over_month
   if (!mom || Object.keys(mom).length === 0) return null
   return Object.values(mom).reduce((s, e) => s + e.delta_eur, 0)
 })
-
 const moneyLead = computed(() => {
   const d = monthDelta.value
-  if (d == null) return 'Here is where your money went this month.'
+  if (d == null) return 'Here is where your money went this period.'
   if (Math.abs(d) < 1) return 'Your spending was roughly flat compared with last month.'
-  return d > 0
-    ? `You spent ${money(d)} more than last month.`
-    : `You spent ${money(d)} less than last month.`
+  return d > 0 ? `You spent ${money(d)} more than last month.` : `You spent ${money(d)} less than last month.`
 })
 
-// ── Savings & investments ────────────────────────────────────────────────────
+// ── Overview: savings ─────────────────────────────────────────────────────────
 const savingsRate = computed<number | null>(() => {
   const inc = result.value?.income_summary.total_income
   const net = result.value?.spending_analysis.net_savings_this_period
   if (!inc || net == null) return null
   return (net / inc) * 100
 })
-const savingsFill = computed(() => {
-  if (savingsRate.value == null) return 0
-  return Math.max(0, Math.min(100, (savingsRate.value / SAVINGS_TARGET) * 100))
-})
+const savingsFill = computed(() => savingsRate.value == null ? 0 : Math.max(0, Math.min(100, (savingsRate.value / SAVINGS_TARGET) * 100)))
 const savingsStatus = computed<{ kind: 'good' | 'watch' | 'attention'; text: string }>(() => {
   const t = result.value?.yearly_progress.trajectory
   if (t === 'ahead') return { kind: 'good', text: 'Ahead' }
@@ -84,30 +87,14 @@ const savingsStatus = computed<{ kind: 'good' | 'watch' | 'attention'; text: str
   return { kind: 'watch', text: 'On track' }
 })
 const investmentNote = computed(() => result.value?.investment_signal.note ?? '')
-
-// ── Suggestions ──────────────────────────────────────────────────────────────
 const suggestText = computed(() => {
   if (result.value?.reasoning) return result.value.reasoning
   const recs = result.value?.recommendations ?? []
   return recs.slice(0, 3).map(r => r.action).join(' ')
 })
+const lastRunLabel = computed(() => lastRun.value ? lastRun.value.toLocaleDateString() : null)
 
-// ── Detailed chart (hbar) ────────────────────────────────────────────────────
-const hbarRows = computed(() => {
-  const pie = result.value?.chart_data.spending_by_category_pie
-  let rows: { label: string; value: number }[] = []
-  if (pie && pie.length) {
-    rows = pie.map(p => ({ label: prettyCategory(p.label), value: p.value }))
-  } else if (result.value) {
-    rows = Object.entries(result.value.spending_analysis.categories)
-      .map(([name, c]) => ({ label: prettyCategory(name), value: c.actual }))
-  }
-  return rows.filter(r => r.value > 0).sort((a, b) => b.value - a.value)
-})
-const hbarMax = computed(() => Math.max(1, ...hbarRows.value.map(r => r.value)))
-const chartsOpen = ref(false)
-
-// ── Run / upload ─────────────────────────────────────────────────────────────
+// ── Run / upload ──────────────────────────────────────────────────────────────
 const fileInput = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
 function pickFile() { fileInput.value?.click() }
@@ -131,14 +118,13 @@ async function onPickFile(e: Event) {
   }
 }
 
-async function runNow() {
-  await runAnalysis({ mode: 'ytd' })
+async function runDefault() { await doRun({ mode: 'ytd' }) }
+async function doRun(params: AnalysisParams) {
+  await runAnalysis(params)
   if (status.value === 'error') toast(error.value ?? 'Analysis failed', 'error')
 }
 
-const lastRunLabel = computed(() => lastRun.value ? lastRun.value.toLocaleDateString() : null)
-
-// ── Delete ───────────────────────────────────────────────────────────────────
+// ── Delete ────────────────────────────────────────────────────────────────────
 const confirmDel = ref(false)
 async function deleteAll() {
   confirmDel.value = false
@@ -162,99 +148,108 @@ async function deleteAll() {
 
     <input ref="fileInput" type="file" accept=".pdf,.csv,.xlsx,.xls" hidden @change="onPickFile" />
 
-    <!-- Loading -->
-    <PiCard v-if="status === 'loading'" style="margin-bottom: var(--space-6);">
-      <div class="pi-progress pi-progress--thin"><div class="pi-progress__track"><div class="pi-progress__fill" style="width: 40%;" /></div></div>
-      <p class="t-secondary" style="font-size: var(--text-sm); margin-top: var(--space-3);">Analysing your statements…</p>
-    </PiCard>
+    <!-- Tabs -->
+    <div style="margin-bottom: var(--space-6);">
+      <Pills :options="TABS" :modelValue="activeTab" @update:modelValue="(v) => (activeTab = v as typeof activeTab)" />
+    </div>
 
-    <!-- Empty / first-run -->
-    <UploadBanner
-      v-if="!populated && status !== 'loading'"
-      tone="info"
-      icon="finances"
-      title="Get your financial analysis"
-      intro="Upload your financial documents and your brain will give you a clear picture of your money — without jargon."
-      :items="[
-        'Bank statements (PDF or CSV)',
-        'Payslips or salary records',
-        'Investment portfolio exports (PDF, CSV, or Excel)',
-        'Credit card statements',
-        'Pension or retirement fund summaries',
-      ]"
-      note="This data is only on your server. You can delete it at any time from Brain → Manage data."
-    >
-      <template #actions>
-        <PiButton variant="cta" icon="upload" :loading="uploading" @click="pickFile">Upload financial files</PiButton>
-        <PiButton variant="secondary" @click="runNow">Run analysis</PiButton>
-      </template>
-    </UploadBanner>
+    <!-- ══ OVERVIEW ══ -->
+    <template v-if="activeTab === 'overview'">
+      <PiCard v-if="status === 'loading'" style="margin-bottom: var(--space-6);">
+        <div class="pi-progress pi-progress--thin"><div class="pi-progress__track"><div class="pi-progress__fill" style="width: 40%;" /></div></div>
+        <p class="t-secondary" style="font-size: var(--text-sm); margin-top: var(--space-3);">Analysing your statements…</p>
+      </PiCard>
 
-    <!-- Populated -->
-    <template v-if="populated">
-      <div class="pi-insight-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-4);">
-        <!-- Your money this month (full width) -->
-        <div style="grid-column: 1 / -1;">
-          <InsightCard title="Your money this month">
-            <SpendBar v-if="spendSegments.length" :segments="spendSegments" />
-            <p class="pi-insight__lead" style="margin-top: var(--space-5);">{{ moneyLead }}</p>
+      <UploadBanner
+        v-if="!populated && status !== 'loading'"
+        tone="info"
+        icon="finances"
+        title="Get your financial analysis"
+        intro="Upload your financial documents and your brain will give you a clear picture of your money — without jargon."
+        :items="[
+          'Bank statements (PDF or CSV)',
+          'Payslips or salary records',
+          'Investment portfolio exports (PDF, CSV, or Excel)',
+          'Credit card statements',
+          'Pension or retirement fund summaries',
+        ]"
+        note="This data is only on your server. You can delete it at any time from Brain → Manage data."
+      >
+        <template #actions>
+          <PiButton variant="cta" icon="upload" :loading="uploading" @click="pickFile">Upload financial files</PiButton>
+          <PiButton variant="secondary" @click="runDefault">Run analysis</PiButton>
+        </template>
+      </UploadBanner>
+
+      <template v-if="populated">
+        <div class="pi-insight-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-4);">
+          <div style="grid-column: 1 / -1;">
+            <InsightCard title="Your money this period">
+              <SpendBar v-if="spendSegments.length" :segments="spendSegments" />
+              <p class="pi-insight__lead" style="margin-top: var(--space-5);">{{ moneyLead }}</p>
+            </InsightCard>
+          </div>
+
+          <InsightCard title="Savings and investments">
+            <template #status><StatusPill :kind="savingsStatus.kind">{{ savingsStatus.text }}</StatusPill></template>
+            <div v-if="savingsRate != null" class="pi-goal" style="margin-bottom: var(--space-4);">
+              <div class="pi-goal__head">
+                <span class="t-secondary" style="font-size: var(--text-sm);">Savings rate</span>
+                <span class="pi-goal__val" style="color: var(--success);">{{ Math.round(savingsRate) }}%</span>
+              </div>
+              <ProgressBar :value="savingsFill" variant="success" :showPct="false" />
+              <div class="pi-goal__scale"><span>0%</span><span>Target {{ SAVINGS_TARGET }}%</span></div>
+            </div>
+            <p v-if="savingsRate != null" class="pi-insight__lead" style="font-size: var(--text-base);">
+              You're saving about {{ Math.round(savingsRate) }}% of your income. Most financial guidance suggests {{ SAVINGS_TARGET }}% — {{ savingsRate >= SAVINGS_TARGET ? "you're there." : "you're close, keep building the habit." }}
+            </p>
+            <p v-if="investmentNote" class="pi-insight__lead" style="font-size: var(--text-base); margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle);">
+              {{ investmentNote }}
+            </p>
+          </InsightCard>
+
+          <InsightCard title="What your finances suggest">
+            <p class="pi-insight__lead" style="font-size: var(--text-base);">{{ suggestText || 'No specific suggestions right now — your finances look balanced.' }}</p>
           </InsightCard>
         </div>
 
-        <!-- Savings & investments -->
-        <InsightCard title="Savings and investments">
-          <template #status><StatusPill :kind="savingsStatus.kind">{{ savingsStatus.text }}</StatusPill></template>
-          <div v-if="savingsRate != null" class="pi-goal" style="margin-bottom: var(--space-4);">
-            <div class="pi-goal__head">
-              <span class="t-secondary" style="font-size: var(--text-sm);">Savings rate</span>
-              <span class="pi-goal__val" style="color: var(--success);">{{ Math.round(savingsRate) }}%</span>
-            </div>
-            <ProgressBar :value="savingsFill" variant="success" :showPct="false" />
-            <div class="pi-goal__scale"><span>0%</span><span>Target {{ SAVINGS_TARGET }}%</span></div>
+        <div style="display: flex; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; align-items: center;">
+          <div style="display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap;">
+            <PiButton variant="ghost" icon="plus" :loading="uploading" @click="pickFile">Upload more data</PiButton>
+            <PiButton variant="ghost" :loading="status === 'loading'" @click="runDefault">Re-run analysis</PiButton>
+            <span v-if="lastRunLabel" class="t-mono t-tertiary" style="font-size: var(--text-xs);">Updated {{ lastRunLabel }}</span>
+            <button class="pi-show-numbers" style="display: inline-flex; align-items: center; gap: 4px;" @click="activeTab = 'spending'">
+              Full breakdown <PIIcon name="arrowRight" :size="14" />
+            </button>
           </div>
-          <p v-if="savingsRate != null" class="pi-insight__lead" style="font-size: var(--text-base);">
-            You're saving about {{ Math.round(savingsRate) }}% of your income. Most financial guidance suggests {{ SAVINGS_TARGET }}% — {{ savingsRate >= SAVINGS_TARGET ? "you're there." : "you're close, keep building the habit." }}
-          </p>
-          <p v-if="investmentNote" class="pi-insight__lead" style="font-size: var(--text-base); margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle);">
-            {{ investmentNote }}
-          </p>
-        </InsightCard>
-
-        <!-- What your finances suggest -->
-        <InsightCard title="What your finances suggest">
-          <p class="pi-insight__lead" style="font-size: var(--text-base);">{{ suggestText || 'No specific suggestions right now — your finances look balanced.' }}</p>
-        </InsightCard>
-      </div>
-
-      <!-- Detailed charts — collapsed, horizontal bars only -->
-      <PiCard style="margin-bottom: var(--space-6);">
-        <div :class="['pi-collapse', chartsOpen ? 'pi-collapse--open' : '']">
-          <button type="button" class="pi-collapse__toggle" :aria-expanded="chartsOpen" @click="chartsOpen = !chartsOpen">
-            <PIIcon name="chevronRight" :size="14" />Show detailed charts
-          </button>
-          <div v-if="chartsOpen" class="pi-collapse__body">
-            <div style="font-family: var(--font-display); font-weight: 500; margin-bottom: var(--space-4);">Spending by category · this period</div>
-            <div class="pi-hbar">
-              <div v-for="r in hbarRows" :key="r.label" class="pi-hbar__row">
-                <span class="pi-hbar__label">{{ r.label }}</span>
-                <div class="pi-hbar__track"><div class="pi-hbar__fill" :style="{ width: `${(r.value / hbarMax) * 100}%` }" /></div>
-                <span class="pi-hbar__val">{{ money(r.value) }}</span>
-              </div>
-            </div>
-          </div>
+          <PiButton variant="danger" icon="trash" @click="confirmDel = true">Delete all financial data</PiButton>
         </div>
+      </template>
+    </template>
+
+    <!-- ══ SPENDING & BUDGET ══ -->
+    <template v-else-if="activeTab === 'spending'">
+      <PiCard style="margin-bottom: var(--space-6);">
+        <PeriodControls :loading="status === 'loading'" :hasResult="!!result" @run="doRun" />
       </PiCard>
 
-      <!-- Actions -->
-      <div style="display: flex; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; align-items: center;">
-        <div style="display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap;">
-          <PiButton variant="ghost" icon="plus" :loading="uploading" @click="pickFile">Upload more data</PiButton>
-          <PiButton variant="ghost" :loading="status === 'loading'" @click="runNow">Re-run analysis</PiButton>
-          <span v-if="lastRunLabel" class="t-mono t-tertiary" style="font-size: var(--text-xs);">Updated {{ lastRunLabel }}</span>
-        </div>
-        <PiButton variant="danger" icon="trash" @click="confirmDel = true">Delete all financial data</PiButton>
-      </div>
+      <PiCard v-if="status === 'loading'" style="margin-bottom: var(--space-6);">
+        <div class="pi-progress pi-progress--thin"><div class="pi-progress__track"><div class="pi-progress__fill" style="width: 40%;" /></div></div>
+        <p class="t-secondary" style="font-size: var(--text-sm); margin-top: var(--space-3);">Fetching statements from memory and running the analysis. This can take 30–90s.</p>
+      </PiCard>
+      <PiCard v-if="status === 'error' && error" style="border-color: var(--danger); margin-bottom: var(--space-6);">
+        <span style="color: var(--danger); font-size: var(--text-sm);">{{ error }}</span>
+      </PiCard>
+
+      <SpendingBudgetPanel v-if="result" :result="result" />
+      <p v-else-if="status !== 'loading'" class="fin-empty">No analysis yet — choose a period above and run it.</p>
     </template>
+
+    <!-- ══ INVESTMENTS ══ -->
+    <InvestingPanel v-else-if="activeTab === 'investments'" />
+
+    <!-- ══ DAY TRADING ══ -->
+    <DayTradingPanel v-else-if="activeTab === 'trading'" />
   </div>
 
   <ConfirmModal

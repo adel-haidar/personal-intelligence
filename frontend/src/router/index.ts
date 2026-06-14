@@ -51,9 +51,9 @@ const router = createRouter({
     { path: '/pulse',      component: () => import('../views/PulseFeed.vue'), meta: { title: 'Pulse' } },
     { path: '/signal',     component: () => import('../views/SignalPlayer.vue'), meta: { title: 'Signal' } },
     { path: '/settings',   component: () => import('../views/SettingsView.vue') },
-    // Finances — Calm-Intelligence redesign wired to the bank adviser analysis.
-    // The full BankAdviser tool (investing + day-trading) remains in views/BankAdviser.vue
-    // and can be reinstated behind an "Advanced analysis" route/collapse if desired.
+    // Finances — Calm-Intelligence redesign. Tabbed: Overview (plain-language
+    // summary) + Spending & budget + Investments + Day trading, all wired to the
+    // bank-adviser / advisory composables.
     { path: '/finances',   component: () => import('../views/FinancesView.vue'), meta: { title: 'Finances' } },
     { path: '/about',      component: () => import('../views/AboutView.vue'), meta: { public: true } },
   ],

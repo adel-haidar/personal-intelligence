@@ -1,0 +1,95 @@
+/* ============================================================================
+   FINANCES — advanced analysis panels (Calm Intelligence)
+   Restyled equivalents of the old BankAdviser tables/KPIs/charts using the
+   new design tokens. Shared across the spending, investing and trading panels.
+   ============================================================================ */
+
+/* ---- Run bar (header + run button per panel) ------------------------------ */
+.fin-runbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-5); }
+.fin-runbar__meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-tertiary); }
+.fin-empty { font-size: var(--text-sm); color: var(--text-tertiary); line-height: 1.6; padding: var(--space-2) 0 var(--space-4); max-width: 60ch; }
+
+/* ---- Period controls ------------------------------------------------------- */
+.fin-controls { display: flex; flex-direction: column; gap: var(--space-4); }
+.fin-control-row { display: flex; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; }
+.fin-control-label {
+  font-family: var(--font-display); font-weight: 500; font-size: var(--text-sm);
+  color: var(--text-secondary); width: 76px; flex: 0 0 auto; padding-top: 7px;
+}
+
+/* ---- KPI cards ------------------------------------------------------------- */
+.fin-kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); margin-bottom: var(--space-6); }
+@media (max-width: 768px) { .fin-kpi-grid { grid-template-columns: 1fr; } }
+.fin-kpi__label { font-family: var(--font-display); font-weight: 500; font-size: var(--text-xs); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.04em; }
+.fin-kpi__value { font-family: var(--font-display); font-weight: 600; font-size: 26px; letter-spacing: -0.01em; line-height: 1.1; margin-top: 6px; }
+.fin-kpi__value--pos { color: var(--success); }
+.fin-kpi__value--neg { color: var(--danger); }
+.fin-kpi__sub { font-size: var(--text-sm); color: var(--text-secondary); margin-top: 6px; line-height: 1.5; }
+.fin-kpi__sep { color: var(--text-tertiary); margin: 0 4px; }
+
+/* ---- Section heading ------------------------------------------------------- */
+.fin-section { margin-bottom: var(--space-6); }
+.fin-section__title { font-family: var(--font-display); font-weight: 600; font-size: var(--text-md); margin-bottom: var(--space-4); }
+
+/* ---- Data table ------------------------------------------------------------ */
+.fin-table-wrap { overflow-x: auto; }
+.fin-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.fin-table th {
+  text-align: left; font-family: var(--font-display); font-weight: 500;
+  font-size: var(--text-xs); color: var(--text-tertiary); text-transform: uppercase;
+  letter-spacing: 0.04em; padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
+}
+.fin-table td { padding: var(--space-3); border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); vertical-align: middle; }
+.fin-table tbody tr:last-child td { border-bottom: 0; }
+.fin-table tbody tr:hover { background: var(--background-raised); }
+.fin-th-num { text-align: right; }
+.fin-num { text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+.fin-cell-strong { font-family: var(--font-display); font-weight: 500; }
+.fin-note { color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.5; }
+.fin-muted { color: var(--text-tertiary); }
+.fin-pos { color: var(--success); }
+.fin-neg { color: var(--danger); }
+.fin-row-click { cursor: pointer; }
+.fin-detail td { background: var(--accent-surface); }
+.fin-detail-line { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.6; }
+.fin-detail-line + .fin-detail-line { margin-top: 4px; }
+.fin-detail-key { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; margin-right: var(--space-3); }
+.fin-anomaly td { background: var(--danger-surface); }
+
+/* ---- Budget bars ----------------------------------------------------------- */
+.fin-budget-row { display: grid; grid-template-columns: 180px 1fr 90px; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; }
+@media (max-width: 640px) { .fin-budget-row { grid-template-columns: 110px 1fr 80px; } }
+.fin-budget-row--savings { border: 1px solid var(--accent-primary); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); }
+.fin-budget-label { font-size: var(--text-sm); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fin-budget-track { height: 8px; background: var(--background-raised); border-radius: var(--radius-pill); overflow: hidden; }
+.fin-budget-fill { height: 100%; background: var(--accent-primary); border-radius: var(--radius-pill); }
+.fin-budget-row--savings .fin-budget-fill { background: var(--success); }
+.fin-budget-val { font-family: var(--font-mono); font-size: var(--text-xs); text-align: right; color: var(--text-secondary); }
+.fin-budget-footer { font-size: var(--text-sm); color: var(--text-secondary); padding-top: var(--space-3); margin-top: var(--space-2); border-top: 1px solid var(--border-subtle); }
+
+/* ---- Recommendations list -------------------------------------------------- */
+.fin-rec { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); }
+.fin-rec__head { display: flex; align-items: center; gap: var(--space-2); }
+.fin-rec__cat { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; }
+.fin-rec__action { font-size: var(--text-sm); color: var(--text-primary); line-height: 1.55; }
+
+/* ---- Charts ---------------------------------------------------------------- */
+.fin-charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-5); }
+@media (max-width: 900px) { .fin-charts { grid-template-columns: 1fr; } }
+.fin-chart__label { font-family: var(--font-display); font-weight: 500; font-size: var(--text-sm); margin-bottom: var(--space-2); }
+.fin-chart__wrap { height: 200px; position: relative; }
+
+/* ---- Day-trading regions --------------------------------------------------- */
+.fin-region-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); margin-bottom: var(--space-6); }
+@media (max-width: 900px) { .fin-region-grid { grid-template-columns: 1fr; } }
+.fin-idx-row { display: grid; grid-template-columns: 1fr auto auto; gap: var(--space-3); font-size: var(--text-sm); padding: 3px 0; color: var(--text-secondary); align-items: center; }
+.fin-idx-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fin-region-summary { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.6; margin-top: var(--space-3); }
+
+/* ---- Narrative / meta ------------------------------------------------------ */
+.fin-reasoning { font-family: var(--font-serif); font-size: var(--text-base); line-height: 1.7; color: var(--text-primary); white-space: pre-wrap; }
+.fin-meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.9; }
+.fin-meta-key { display: inline-block; margin-right: var(--space-2); padding: 1px 6px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); color: var(--text-tertiary); }
+.fin-meta-key--failed { margin-left: var(--space-3); color: var(--danger); border-color: var(--danger); }
+.fin-notes { margin: 0; padding-left: var(--space-5); font-size: var(--text-sm); line-height: 1.8; color: var(--text-secondary); }
