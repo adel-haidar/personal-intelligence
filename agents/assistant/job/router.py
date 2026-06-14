@@ -9,7 +9,7 @@ from assistant.job import agent as job_agent
 from assistant.job.db import init_pool, list_matches, list_unknown_companies, set_status, update_company
 from assistant.job.models import RunReport
 from assistant.job.report import format_report
-from assistant.shared.auth import require_user
+from assistant.shared.auth import require_auth
 from assistant.shared.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -26,11 +26,14 @@ class StatusUpdate(BaseModel):
 async def trigger_run(
     background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
-    ident: dict = Depends(require_user),
+    _: str = Depends(require_auth),
 ):
+    # Owner-only: job_matches is a single shared pool (no user_id column yet),
+    # so the whole module stays gated to the owner to avoid exposing the owner's
+    # matches to other tenants. Per-user jobs needs a schema migration.
     if not settings.database_url:
         raise HTTPException(503, "DATABASE_URL is not configured")
-    background_tasks.add_task(_run_job_agent, settings, ident["token"])
+    background_tasks.add_task(_run_job_agent, settings)
     return {
         "status": "started",
         "message": "Job hunt agent running in background. Poll GET /api/jobs/report for results.",
@@ -43,7 +46,7 @@ async def get_matches(
     country: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     settings: Settings = Depends(get_settings),
-    _: dict = Depends(require_user),
+    _: str = Depends(require_auth),
 ):
     if not settings.database_url:
         raise HTTPException(503, "DATABASE_URL is not configured")
@@ -57,7 +60,7 @@ async def update_status(
     match_id: int,
     body: StatusUpdate,
     settings: Settings = Depends(get_settings),
-    _: dict = Depends(require_user),
+    _: str = Depends(require_auth),
 ):
     if not settings.database_url:
         raise HTTPException(503, "DATABASE_URL is not configured")
@@ -73,7 +76,7 @@ async def update_status(
 
 
 @router.get("/fix-companies")
-async def fix_companies(settings: Settings = Depends(get_settings), _: dict = Depends(require_user)):
+async def fix_companies(settings: Settings = Depends(get_settings), _: str = Depends(require_auth)):
     """One-time migration: re-fetch company names for rows with 'Explore companies' or 'Unknown'."""
     if not settings.database_url:
         raise HTTPException(503, "DATABASE_URL is not configured")
@@ -109,7 +112,7 @@ async def fix_companies(settings: Settings = Depends(get_settings), _: dict = De
 
 
 @router.get("/report")
-async def get_report(_: dict = Depends(require_user)):
+async def get_report(_: str = Depends(require_auth)):
     if _latest_report is None:
         raise HTTPException(
             404, "No completed run yet — call GET /api/jobs/run to start one."
