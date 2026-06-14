@@ -15,6 +15,7 @@ import logging
 import re
 import time
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -32,10 +33,12 @@ from private_internet.users.passwords import (
     verify_password,
 )
 from private_internet.users.provisioning import provision_user
+from private_internet.memory.service import delete_all_memories, list_memories
 from private_internet.users.service import (
     clear_reset_token,
     count_users,
     create_user,
+    delete_account,
     get_user_by_email,
     get_user_by_id,
     get_user_by_reset_token,
@@ -127,6 +130,15 @@ class LoginRequest(BaseModel):
 class OnboardingRequest(BaseModel):
     onboarding_step: int | None = None
     onboarding_completed: bool | None = None
+
+
+class ProfileRequest(BaseModel):
+    display_name: str | None = None
+    language_preference: str | None = None
+
+
+class DeleteAccountRequest(BaseModel):
+    confirm: str = ""
 
 
 class EmailRequest(BaseModel):
@@ -350,6 +362,66 @@ async def me(ctx: RequestContext = Depends(get_request_context)):
     if user is None:
         return _error(404, "User not found.")
     return {"user": user}
+
+
+@router.patch("/profile")
+async def update_profile(
+    body: ProfileRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    fields: dict = {}
+    if body.display_name is not None:
+        name = body.display_name.strip()
+        if not name:
+            return _error(422, "Display name cannot be empty.")
+        fields["display_name"] = name
+    if body.language_preference is not None:
+        fields["language_preference"] = body.language_preference.strip()
+    if not fields:
+        return _error(422, "Nothing to update.")
+    user = update_user(ctx.user_id, **fields)
+    if user is None:
+        return _error(404, "User not found.")
+    return {"user": user}
+
+
+@router.get("/export")
+async def export_data(ctx: RequestContext = Depends(get_request_context)):
+    """Download everything in the user's brain as a JSON archive."""
+    user = get_user_by_id(ctx.user_id)
+    if user is None:
+        return _error(404, "User not found.")
+    items, total = list_memories(page=1, page_size=100000, user_id=ctx.user_id)
+    payload = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "profile": user,
+        "memory_count": total,
+        "memories": items,
+    }
+    return JSONResponse(
+        content=payload,
+        headers={"Content-Disposition": 'attachment; filename="private-internet-export.json"'},
+    )
+
+
+@router.post("/clear-brain")
+async def clear_brain(ctx: RequestContext = Depends(get_request_context)):
+    """Delete all of the user's memories (modules reset to empty)."""
+    deleted = delete_all_memories(user_id=ctx.user_id)
+    logger.info(f"{ctx.log_prefix} cleared brain ({deleted} memories)")
+    return {"deleted": deleted}
+
+
+@router.delete("/account")
+async def delete_my_account(
+    body: DeleteAccountRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Permanently delete the account and all data. Requires confirm == 'DELETE'."""
+    if body.confirm != "DELETE":
+        return _error(422, "Type DELETE to confirm account deletion.")
+    delete_account(ctx.user_id)
+    return {"deleted": True}
 
 
 @router.patch("/onboarding")

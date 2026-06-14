@@ -340,6 +340,49 @@ def list_onboarded_user_ids() -> list[str]:
     return ids
 
 
+# ── Account deletion ─────────────────────────────────────────────────
+
+# Every user-scoped table. content_creators / plan_limits are shared (no user_id).
+# Ordered children-before-parents so FK constraints never block the delete.
+_USER_DATA_TABLES = [
+    "content_interactions",
+    "content_research",
+    "content_posts",
+    "content_videos",
+    "content_topics",
+    "user_creator_preferences",
+    "health_metrics",
+    "job_matches",
+    "memories",
+]
+
+
+def delete_account(user_id: str) -> None:
+    """Permanently delete a user and ALL their data from this server.
+
+    Skips tables that don't exist in this deployment (to_regclass guard) so it
+    works whether or not the agents' health/job tables share the database.
+    """
+    assert user_id is not None
+    conn = _connect()
+    cur = conn.cursor()
+    try:
+        for table in _USER_DATA_TABLES:
+            cur.execute("SELECT to_regclass(%s)", (f"public.{table}",))
+            if cur.fetchone()[0] is None:
+                continue
+            cur.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
+        cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        conn.commit()
+        logger.info(f"[user:{user_id[:8]}] account and all data deleted")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
 def _seed_admin_email() -> str:
     settings = get_settings()
     return settings.seed_admin_email or f"admin@{settings.app_domain}"

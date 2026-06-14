@@ -33,11 +33,11 @@ const open = ref(false)
       <div style="flex: 1; min-width: 0">
         <div class="pi-device__name">{{ name }}</div>
         <div class="pi-device__meta">
-          {{ connected ? `Last sync: ${lastSync}` : 'Not connected' }}
+          {{ connected ? `Last update: ${lastSync ?? '—'}` : 'No data yet' }}
         </div>
       </div>
-      <Badge v-if="connected" variant="success" icon="check">Connected</Badge>
-      <Badge v-else variant="outlined">Disconnected</Badge>
+      <Badge v-if="connected" variant="success" icon="check">Synced</Badge>
+      <Badge v-else variant="outlined">Not synced</Badge>
     </div>
     <button
       class="pi-btn pi-btn--ghost pi-btn--compact"
@@ -45,7 +45,7 @@ const open = ref(false)
       @click="open = !open"
     >
       <PIIcon :name="open ? 'chevronDown' : 'chevronRight'" :size="14" />
-      {{ open ? 'Hide instructions' : 'How to connect' }}
+      {{ open ? 'Hide steps' : 'How to sync' }}
     </button>
     <div v-if="open" class="pi-device__instructions">
       <ol>
