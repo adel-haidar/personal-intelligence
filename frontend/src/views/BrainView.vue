@@ -38,6 +38,7 @@ import IconButton from '../components/ui/IconButton.vue'
 import { useToast } from '../components/ui/useToast'
 import { requireAuth } from '../composables/useAuth'
 import { deleteMemory } from '../composables/useMemories'
+import { useBrainOrganiser } from '../composables/useBrainOrganiser'
 import { API_BASE } from '../config/env'
 import type { Memory, MemoryListResponse, MemoryStats, CreateMemoryPayload } from '../types/memory'
 
@@ -156,7 +157,11 @@ async function fetchMemories(reset = false): Promise<void> {
 // ---------------------------------------------------------------------------
 // Initial load
 // ---------------------------------------------------------------------------
+// Brain Organiser: live "sleeping" state for the banner (shared 10s poller).
+const { status: organiserStatus, running: organiserRunning, ensurePolling: ensureOrganiserPolling } = useBrainOrganiser()
+
 onMounted(async () => {
+  ensureOrganiserPolling()
   try {
     await Promise.all([fetchStats(), fetchMemories(true)])
   } catch (err) {
@@ -342,6 +347,26 @@ const hasMore = computed(() => page.value < pages.value)
     </div>
 
     <!-- ------------------------------------------------------------------ -->
+    <!-- Brain sleeping banner (only while the organiser runs)                -->
+    <!-- ------------------------------------------------------------------ -->
+    <div v-if="organiserRunning" class="brain-sleep" role="status">
+      <div class="brain-sleep__head">
+        <span class="brain-sleep__emoji" aria-hidden="true">💤</span>
+        <span class="brain-sleep__title">Your brain is sleeping</span>
+      </div>
+      <p class="brain-sleep__body">
+        Duplicates are being removed and related memories are being merged.
+        New memories can still be added.
+      </p>
+      <div class="brain-sleep__progress">
+        <span class="t-mono brain-sleep__stage">
+          Stage {{ organiserStatus?.stage ?? 1 }} of 3 — {{ organiserStatus?.stage_label ?? 'Organising' }}
+        </span>
+        <ProgressBar :value="organiserStatus?.progress_pct ?? 0" variant="amber" :show-pct="true" />
+      </div>
+    </div>
+
+    <!-- ------------------------------------------------------------------ -->
     <!-- Add memory card                                                      -->
     <!-- ------------------------------------------------------------------ -->
     <PiCard class="brain-add">
@@ -504,6 +529,41 @@ const hasMore = computed(() => page.value < pages.value)
 </template>
 
 <style scoped>
+/* Brain sleeping banner */
+.brain-sleep {
+  background: var(--brain-amber-surface);
+  border-left: 3px solid var(--brain-amber);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-5);
+}
+.brain-sleep__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.brain-sleep__emoji { font-size: 18px; line-height: 1; }
+.brain-sleep__title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+.brain-sleep__body {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-4);
+  max-width: 60ch;
+}
+.brain-sleep__stage {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-2);
+}
+
 /* Container */
 .brain-view {
   max-width: var(--content-reading);

@@ -12,6 +12,7 @@ import ConfirmModal from '../components/ui/ConfirmModal.vue'
 import { useToast } from '../components/ui/useToast'
 import { useTheme } from '../composables/useTheme'
 import { useBilling } from '../composables/useBilling'
+import { useBrainOrganiser } from '../composables/useBrainOrganiser'
 import { requireAuth, logout } from '../composables/useAuth'
 import { API_BASE } from '../config/env'
 
@@ -19,6 +20,28 @@ const router = useRouter()
 const toast = useToast()
 const { theme } = useTheme()
 const { status: billing, fetchStatus, openPortal } = useBilling()
+const {
+  status: organiserStatus,
+  running: organiserRunning,
+  organise: runOrganise,
+  fetchStatus: fetchOrganiserStatus,
+} = useBrainOrganiser()
+
+const organiserLastRunText = computed(() => {
+  const lr = organiserStatus.value?.last_run
+  if (!lr || !lr.completed_at) return 'Never run'
+  const date = new Date(lr.completed_at).toLocaleDateString()
+  return `Last run: ${date} — ${lr.duplicates_removed} duplicates removed, ${lr.clusters_merged} merged`
+})
+
+async function organiseNow() {
+  const r = await runOrganise()
+  if (r.ok || r.conflict) {
+    router.push('/memory') // brain page (/memory) shows the sleeping banner
+  } else {
+    toast(r.error || 'Could not start the organiser', 'error')
+  }
+}
 
 const SECTIONS = ['Profile', 'Privacy & data', 'Notifications', 'About'] as const
 type Section = typeof SECTIONS[number]
@@ -45,6 +68,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 onMounted(async () => {
   fetchStatus()
+  fetchOrganiserStatus()
   try {
     const res = await fetch(`${API_BASE}/api/auth/me`, { headers: await authHeaders() })
     if (res.ok) {
@@ -201,6 +225,17 @@ const showBilling = computed(() => billing.value?.billing_enabled)
               <div class="pi-set-row__desc">Remove all memories. Modules will reset to empty. This cannot be undone.</div>
             </div>
             <PiButton variant="secondary" size="compact" style="border-color: var(--warning); color: var(--warning);" @click="confirmClear = true">Clear</PiButton>
+          </div>
+
+          <div class="pi-set-row">
+            <div>
+              <div class="pi-set-row__title">Organise brain memory</div>
+              <div class="pi-set-row__desc">Remove duplicates and merge related memories.</div>
+              <div class="pi-set-row__desc t-mono" style="font-size: var(--text-xs); margin-top: 4px;">{{ organiserLastRunText }}</div>
+            </div>
+            <PiButton variant="secondary" size="compact" :loading="organiserRunning" :disabled="organiserRunning" @click="organiseNow">
+              Organise now
+            </PiButton>
           </div>
 
           <div v-if="showBilling" class="pi-set-row">

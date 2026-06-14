@@ -1,10 +1,35 @@
 <script setup lang="ts">
+import { onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import BrandMark from './ui/BrandMark.vue'
 import BrainPulse from './ui/BrainPulse.vue'
 import PIIcon from './ui/PIIcon.vue'
 import Avatar from './ui/Avatar.vue'
 import ModeToggle from './ui/ModeToggle.vue'
+import { useToast } from './ui/useToast'
+import { useBrainOrganiser } from '../composables/useBrainOrganiser'
+
+// Always-visible Brain Organiser signal: the sidebar is mounted for the whole
+// authenticated session, so it owns the single status poller and fires the
+// result toast on completion/failure (it lives inside the ToastProvider).
+const toast = useToast()
+const { running: organiserRunning, ensurePolling, onTransition } = useBrainOrganiser()
+let offTransition: (() => void) | null = null
+
+onMounted(() => {
+  ensurePolling()
+  offTransition = onTransition((to, s) => {
+    if (to === 'completed' && s.last_run) {
+      toast(
+        `💤 Brain organised — ${s.last_run.duplicates_removed} duplicates removed, ${s.last_run.clusters_merged} memories merged.`,
+        'success',
+      )
+    } else if (to === 'failed') {
+      toast('Brain organiser encountered an error. Your memories are unchanged.', 'error')
+    }
+  })
+})
+onUnmounted(() => { offTransition?.() })
 
 // Props — wiring memory count will come in a later increment.
 interface Props {
@@ -64,8 +89,15 @@ const NAV_SYS: NavItem[] = [
           :class="['pi-nav__item', item.brain ? 'pi-nav__item--brain' : '', isActive ? 'pi-nav__item--active' : '']"
           @click="navigate"
         >
-          <!-- Brain item gets animated BrainPulse instead of a static icon -->
-          <BrainPulse v-if="item.brain" :size="18" />
+          <!-- Brain item: animated BrainPulse normally; a static 💤 while the
+               Brain Organiser is running ("your brain is sleeping"). -->
+          <span
+            v-if="item.brain && organiserRunning"
+            title="Your brain is being organised…"
+            aria-label="Your brain is being organised"
+            style="font-size: 16px; line-height: 1; width: 18px; text-align: center; flex: 0 0 auto;"
+          >💤</span>
+          <BrainPulse v-else-if="item.brain" :size="18" />
           <PIIcon v-else :name="item.icon" :size="18" />
 
           <span class="pi-nav__label">
