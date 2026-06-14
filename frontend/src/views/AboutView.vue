@@ -2,6 +2,7 @@
 import PageHead from '../components/ui/PageHead.vue'
 import PiCard from '../components/ui/PiCard.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
+import IntroVideo from '../components/IntroVideo.vue'
 </script>
 
 <template>
@@ -10,6 +11,7 @@ import EmptyState from '../components/ui/EmptyState.vue'
       title="How it works"
       desc="Private Internet runs entirely on your own server. Your data never leaves your infrastructure."
     />
+    <IntroVideo style="margin-bottom: var(--space-6)" />
     <PiCard>
       <EmptyState
         icon="shield"

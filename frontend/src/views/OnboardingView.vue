@@ -12,6 +12,7 @@ import Pills from '../components/ui/Pills.vue'
 import UploadZone from '../components/ui/UploadZone.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import PIIcon from '../components/ui/PIIcon.vue'
+import IntroVideo from '../components/IntroVideo.vue'
 
 // ── The export prompt (reproduced verbatim from the design handoff) ───────────
 const PI_MEMORY_PROMPT = `Please write a complete personal profile based on everything you know
@@ -358,6 +359,8 @@ onBeforeUnmount(() => {
           <h1 style="font-size: var(--text-xl); margin-bottom: var(--space-4);">
             Your private internet starts here.
           </h1>
+          <!-- Localized intro film. Before any language choice it follows the browser language. -->
+          <IntroVideo :muted="true" style="max-width: 620px; margin-bottom: var(--space-5);" />
           <div
             class="t-serif"
             style="font-size: var(--text-md); line-height: 1.8; color: var(--text-secondary); display: flex; flex-direction: column; gap: var(--space-3); max-width: 620px;"

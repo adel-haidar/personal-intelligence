@@ -32,6 +32,7 @@ import PiButton from '../components/ui/PiButton.vue'
 import IconButton from '../components/ui/IconButton.vue'
 import PIIcon from '../components/ui/PIIcon.vue'
 import ProgressBar from '../components/ui/ProgressBar.vue'
+import IntroVideo from '../components/IntroVideo.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import { requireAuth } from '../composables/useAuth'
 import { API_BASE } from '../config/env'
@@ -314,6 +315,11 @@ onMounted(async () => {
       </h1>
       <span class="t-mono dash__stamp">{{ dateStamp }}</span>
     </div>
+
+    <!-- -------------------------------------------------------------------- -->
+    <!-- Intro film (localized; follows the active language)                    -->
+    <!-- -------------------------------------------------------------------- -->
+    <IntroVideo style="margin-bottom: var(--space-6)" />
 
     <!-- -------------------------------------------------------------------- -->
     <!-- Onboarding banner                                                      -->

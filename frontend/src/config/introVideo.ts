@@ -11,20 +11,23 @@
  *   - When the user changes the language in Settings, setLocale() updates `locale`
  *     reactively and any computed using introVideoUrl(locale.value) re-resolves.
  *
- * PLACEHOLDER: the 5 mp4s are not uploaded yet. Set VITE_INTRO_VIDEO_BASE at build
- * time once they live on S3/CloudFront, e.g.
- *   VITE_INTRO_VIDEO_BASE="https://dxxxx.cloudfront.net/intro"
+ * The 5 mp4s are served from the content CloudFront distribution under /intro/.
+ * Self-hosters on a different distribution can override the base at build time with
+ * VITE_INTRO_VIDEO_BASE (e.g. "https://dxxxx.cloudfront.net/intro").
  * Files are named: private_internet_intro_{en,de,fr,ru,ar}.mp4
- * Until it is set, introVideoUrl() returns '' and <IntroVideo> shows a placeholder.
+ * If the base is ever empty, introVideoUrl() returns '' and <IntroVideo> shows a placeholder.
  */
 
 // Languages we have an intro video for.
 export const INTRO_VIDEO_LANGS = ['en', 'de', 'fr', 'ru', 'ar'] as const
 export type IntroVideoLang = (typeof INTRO_VIDEO_LANGS)[number]
 
-// Base URL of the uploaded videos (no trailing slash). Empty until configured.
+// Default: the content CloudFront distribution, /intro prefix. Override via env for self-hosting.
+const DEFAULT_INTRO_VIDEO_BASE = 'https://d20aaqlrgvxz3g.cloudfront.net/intro'
+
+// Base URL of the uploaded videos (no trailing slash).
 export const INTRO_VIDEO_BASE: string = (
-  import.meta.env.VITE_INTRO_VIDEO_BASE ?? ''
+  import.meta.env.VITE_INTRO_VIDEO_BASE || DEFAULT_INTRO_VIDEO_BASE
 ).replace(/\/$/, '')
 
 /** Map any i18n locale to the closest produced video language (English fallback). */
