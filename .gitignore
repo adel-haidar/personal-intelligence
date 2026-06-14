@@ -29,5 +29,9 @@ Thumbs.db
 *.pem
 *.key
 .ssh/
+stripe_secret.txt
+stripe_secret.properties
+*secret*.txt
+*secret*.properties
 frontend/.design-reference/
 design_handoff_health_export_guide/

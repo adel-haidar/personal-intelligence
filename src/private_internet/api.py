@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from private_internet.auth.oauth import create_oauth_tables
 from private_internet.auth.routes import router as auth_router
+from private_internet.billing.routes import router as billing_router
 from private_internet.config import get_settings
 from private_internet.content.creators import seed_default_creators
 from private_internet.content.db import init_content_db
@@ -94,5 +95,6 @@ app.include_router(users_router)
 app.include_router(user_status_router)
 app.include_router(memory_router)
 app.include_router(content_router)
+app.include_router(billing_router)
 
 app.mount("/mcp", _mcp_app)

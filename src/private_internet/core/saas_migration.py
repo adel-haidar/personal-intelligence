@@ -30,6 +30,11 @@ _USER_COLUMNS = [
     ("plan_expires_at", "TIMESTAMPTZ"),
     ("registration_ip", "VARCHAR(64)"),
     ("provisioned_at", "TIMESTAMPTZ"),
+    # ── Billing (Stripe) ──
+    ("subscription_status", "VARCHAR(32) DEFAULT 'inactive'"),
+    ("stripe_customer_id", "VARCHAR(64)"),
+    ("stripe_subscription_id", "VARCHAR(64)"),
+    ("subscription_current_period_end", "TIMESTAMPTZ"),
 ]
 
 # plan → (max_memories, max_posts_per_week, max_videos_per_week,
@@ -55,6 +60,10 @@ def migrate_saas() -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_password_reset_token "
             "ON users(password_reset_token)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_stripe_customer_id "
+            "ON users(stripe_customer_id)"
         )
 
         # ── 0006: plan_limits ────────────────────────────────────────

@@ -4,6 +4,7 @@ import {
   hasRefreshToken,
   refreshTokens,
 } from '../composables/useAuth'
+import { fetchStatus as fetchBillingStatus } from '../composables/useBilling'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -43,6 +44,11 @@ const router = createRouter({
       component: () => import('../views/OnboardingView.vue'),
       meta:      { fullscreen: true },
     },
+    {
+      path:      '/subscribe',
+      component: () => import('../views/SubscribeView.vue'),
+      meta:      { fullscreen: true },
+    },
     { path: '/overview',   component: () => import('../views/DashboardView.vue'), meta: { title: 'Dashboard' } },
     { path: '/memory',     component: () => import('../views/BrainView.vue'), meta: { title: 'Your Brain' } },
     { path: '/health', component: () => import('../views/HealthView.vue') },
@@ -60,20 +66,43 @@ const router = createRouter({
 
 const PUBLIC = new Set(['/', '/login', '/register', '/oauth/callback', '/about', '/forgot-password', '/reset-password'])
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 router.beforeEach(async (to) => {
   if (PUBLIC.has(to.path)) return true
   // Allow /onboarding when arriving from an email-verification link that carries ?token=
-  if (to.path === '/onboarding' && to.query.token) return true
-  if (isAuthenticated()) return true
-  if (hasRefreshToken()) {
+  const onboardingToken = to.path === '/onboarding' && to.query.token
+
+  // 1. Authentication
+  let authed = onboardingToken || isAuthenticated()
+  if (!authed && hasRefreshToken()) {
     try {
       await refreshTokens()
-      return true
+      authed = true
     } catch {
       return `/login?redirect=${encodeURIComponent(to.fullPath)}`
     }
   }
-  return `/login?redirect=${encodeURIComponent(to.fullPath)}`
+  if (!authed) return `/login?redirect=${encodeURIComponent(to.fullPath)}`
+
+  // 2. Billing gate (inert until BILLING_ENABLED on the server). Onboarding and
+  //    the subscribe page itself are always reachable.
+  if (to.path === '/subscribe' || to.path === '/onboarding') return true
+
+  const billing = await fetchBillingStatus()
+  if (billing?.billing_enabled && !billing.entitled) {
+    // Just returned from Stripe Checkout — wait briefly for the webhook to land.
+    if (to.query.checkout === 'success') {
+      for (let i = 0; i < 5; i++) {
+        const b = await fetchBillingStatus(true)
+        if (b?.entitled) break
+        await sleep(1000)
+      }
+      return true
+    }
+    return '/subscribe'
+  }
+  return true
 })
 
 export default router

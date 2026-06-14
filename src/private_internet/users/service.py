@@ -161,6 +161,55 @@ def touch_last_active(user_id: str) -> None:
     conn.close()
 
 
+# ── Billing / subscriptions ─────────────────────────────────────────
+
+def get_user_by_stripe_customer_id(customer_id: str) -> dict | None:
+    conn = _connect()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM users WHERE stripe_customer_id = %s", (customer_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return _serialize_user(row) if row else None
+
+
+def set_stripe_customer_id(user_id: str, customer_id: str) -> None:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE users SET stripe_customer_id = %s WHERE id = %s",
+        (customer_id, user_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def set_subscription(
+    user_id: str,
+    *,
+    status: str,
+    stripe_subscription_id: str | None = None,
+    current_period_end=None,
+) -> None:
+    """Update a user's subscription state (called from the Stripe webhook)."""
+    sets = ["subscription_status = %s"]
+    params: list = [status]
+    if stripe_subscription_id is not None:
+        sets.append("stripe_subscription_id = %s")
+        params.append(stripe_subscription_id)
+    if current_period_end is not None:
+        sets.append("subscription_current_period_end = %s")
+        params.append(current_period_end)
+    params.append(user_id)
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = %s", tuple(params))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 # ── Email verification ──────────────────────────────────────────────
 
 def set_verification_token(user_id: str) -> str:
