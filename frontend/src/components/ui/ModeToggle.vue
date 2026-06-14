@@ -13,7 +13,7 @@ const { theme, toggleTheme } = useTheme()
 
 <template>
   <button
-    class="pi-mode-toggle"
+    :class="['pi-mode-toggle', !props.withLabel && 'pi-mode-toggle--icon']"
     :aria-label="`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`"
     @click="toggleTheme"
   >
