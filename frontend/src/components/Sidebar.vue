@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import BrandMark from './ui/BrandMark.vue'
 import BrainPulse from './ui/BrainPulse.vue'
@@ -9,10 +9,28 @@ import ModeToggle from './ui/ModeToggle.vue'
 import IconButton from './ui/IconButton.vue'
 import { useToast } from './ui/useToast'
 import { useBrainOrganiser } from '../composables/useBrainOrganiser'
-import { logout } from '../composables/useAuth'
+import { logout, requireAuth } from '../composables/useAuth'
+import { API_BASE } from '../config/env'
 import { useI18n } from '../i18n'
 
 const { t } = useI18n()
+
+// The signed-in user (fetched, not hardcoded).
+const meName = ref('')
+const meMeta = ref('')
+const meAvatar = ref('')
+
+async function loadUser() {
+  try {
+    const token = await requireAuth()
+    const res = await fetch(`${API_BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!res.ok) return
+    const { user } = await res.json()
+    meName.value = user.display_name || user.email || ''
+    meMeta.value = user.email || ''
+    meAvatar.value = user.avatar_url || ''
+  } catch { /* not signed in / offline — keep blank */ }
+}
 
 // Hard navigation so all in-memory state (billing/organiser caches, etc.) is
 // wiped — a clean slate for switching or creating a fresh account.
@@ -29,6 +47,7 @@ const { running: organiserRunning, ensurePolling, onTransition } = useBrainOrgan
 let offTransition: (() => void) | null = null
 
 onMounted(() => {
+  loadUser()
   ensurePolling()
   offTransition = onTransition((to, s) => {
     if (to === 'completed' && s.last_run) {
@@ -146,10 +165,10 @@ const NAV_SYS: NavItem[] = [
 
     <!-- User footer -->
     <div class="pi-sidebar__user">
-      <Avatar :name="userName" :size="32" />
+      <Avatar :name="meName || userName" :src="meAvatar || undefined" :size="32" />
       <div style="min-width: 0; flex: 1">
-        <div class="pi-sidebar__user-name">{{ userName }}</div>
-        <div class="pi-sidebar__user-meta">{{ userPlan }}</div>
+        <div class="pi-sidebar__user-name">{{ meName || userName }}</div>
+        <div class="pi-sidebar__user-meta">{{ meMeta || userPlan }}</div>
       </div>
       <div style="margin-left: auto; flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-1);">
         <ModeToggle :with-label="false" />

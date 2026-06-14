@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { requireAuth, refreshTokens } from './useAuth'
+import { requireAuth, refreshTokens, hasRefreshToken } from './useAuth'
 import { API_BASE } from '../config/env'
 
 // ── Request types ──────────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ export function useBankAdviser() {
 
     let res = await doPost(token, params)
 
-    if (res.status === 401) {
+    if (res.status === 401 && hasRefreshToken()) {
       try {
         await refreshTokens()
         token = await requireAuth()
@@ -241,7 +241,7 @@ export function useBankAdviser() {
       const doGet = (t: string) =>
         fetch(LATEST_URL, { headers: { Authorization: `Bearer ${t}` } })
       let res = await doGet(token)
-      if (res.status === 401) {
+      if (res.status === 401 && hasRefreshToken()) {
         await refreshTokens()
         token = await requireAuth()
         res = await doGet(token)

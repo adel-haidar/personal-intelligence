@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { requireAuth, refreshTokens } from './useAuth'
+import { requireAuth, refreshTokens, hasRefreshToken } from './useAuth'
 import { API_BASE } from '../config/env'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -70,7 +70,10 @@ async function authedPost(path: string): Promise<Response> {
 
 async function withTokenRefresh(fn: () => Promise<Response>): Promise<Response> {
   let res = await fn()
-  if (res.status === 401) {
+  // Only attempt a refresh when we actually have a refresh token (OAuth/legacy
+  // sessions). Password-login sessions have none — calling refreshTokens() there
+  // would clear the session and log the user out on any 401. # see bug: health/finances logout
+  if (res.status === 401 && hasRefreshToken()) {
     await refreshTokens()
     res = await fn()
   }

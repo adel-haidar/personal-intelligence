@@ -1,5 +1,5 @@
 import { ref, type Ref } from 'vue'
-import { requireAuth, refreshTokens } from './useAuth'
+import { requireAuth, refreshTokens, hasRefreshToken } from './useAuth'
 import { API_BASE } from '../config/env'
 
 // ── Investment recommendation types ─────────────────────────────────────────
@@ -116,7 +116,7 @@ export function useAdvisory<T>(runPath: string, latestPath: string): AdvisoryCli
     const doFetch = (t: string) =>
       fetch(`${BASE}${path}`, { method, headers: { Authorization: `Bearer ${t}` } })
     let res = await doFetch(token)
-    if (res.status === 401) {
+    if (res.status === 401 && hasRefreshToken()) {
       await refreshTokens()
       token = await requireAuth()
       res = await doFetch(token)
