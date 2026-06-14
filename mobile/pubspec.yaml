@@ -1,0 +1,55 @@
+name: private_internet
+description: "Private Internet — your AI, your server, your rules. Mobile app."
+publish_to: "none"
+version: 0.1.0+1
+
+# Requires Flutter 3.27+ / Dart 3.6+ (uses the Color.withValues API and
+# TextScaler.clamp). See README for the toolchain version.
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management — Riverpod (no Pinia/Bloc/GetX).
+  # NOTE: we use the manual Riverpod API (NotifierProvider / AsyncNotifierProvider)
+  # rather than @riverpod codegen so the project compiles after `flutter pub get`
+  # with no build_runner step. riverpod_annotation is kept for an easy later migration.
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  dio: ^5.4.3 # HTTP client
+  flutter_secure_storage: ^9.0.0 # JWT storage (Keychain / EncryptedSharedPreferences)
+  go_router: ^13.2.0 # navigation + auth guard
+  google_fonts: ^6.2.1 # Plus Jakarta Sans, Inter, Lora, JetBrains Mono
+  video_player: ^2.8.6 # SIGNAL video playback
+  chewie: ^1.7.5 # video player UI wrapper
+  infinite_scroll_pagination: ^4.0.0 # memory list, pulse feed
+  file_picker: ^8.0.3 # finance/health/document upload
+  url_launcher: ^6.2.7 # external links, OAuth redirect
+  flutter_animate: ^4.5.0 # transitions, like/dislike fills
+  cached_network_image: ^3.3.1 # thumbnails, avatars
+  intl: ^0.19.0 # date formatting
+  shared_preferences: ^2.2.3 # theme + UI state persistence
+  shimmer: ^3.0.0 # skeleton loading states
+  fl_chart: ^0.68.0 # health/finance charts
+  package_info_plus: ^8.0.0 # app version on Settings
+  image_picker: ^1.1.1 # avatar upload
+  webview_flutter: ^4.7.0 # in-app OAuth web flow (cloud wearables)
+
+  # Open Wearables background health sync (iOS HealthKit / Android Health Connect).
+  # TODO(platform): add the real dependency once published, e.g.
+  #   health_bg_sync:
+  #     git:
+  #       url: https://github.com/<org>/open-wearables.git
+  #       path: packages/health_bg_sync
+  # The integration code lives in lib/core/health/health_bg_sync_service.dart behind
+  # a compile-time-safe stub so the app builds without the package present.
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+  # build_runner / riverpod_generator are intentionally omitted — no codegen is used.
+
+flutter:
+  uses-material-design: true

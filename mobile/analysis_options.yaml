@@ -1,0 +1,13 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+
+# We rely on the flutter_lints default rule set. Project-specific doc-comment
+# coverage is maintained by hand rather than via public_member_api_docs (too
+# noisy for UI code).
+linter:
+  rules:
+    avoid_print: true
