@@ -35,7 +35,7 @@ import ProgressBar from '../components/ui/ProgressBar.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import { requireAuth } from '../composables/useAuth'
 import { API_BASE } from '../config/env'
-import brainReflection from '../assets/brain-reflection.svg'
+import brainReflection from '../assets/brain-reflection.webp'
 import type { User } from '../types/user'
 import type { MemoryStats } from '../types/memory'
 
@@ -598,8 +598,8 @@ onMounted(async () => {
 .dash__brain-art img {
   display: block;
   width: 100%;
-  aspect-ratio: 2 / 1;
-  object-fit: contain; /* transparent SVG — let the brain float on the card */
+  aspect-ratio: 3 / 2;
+  object-fit: contain; /* transparent PNG → WebP — let the brain float on the card */
 }
 
 @media (max-width: 768px) {
