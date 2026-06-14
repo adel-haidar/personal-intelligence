@@ -178,7 +178,7 @@ class MemoryClient(BaseLLMService):
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         all_items: list[dict] = []
         page = 1
-        async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
+        async with httpx.AsyncClient(headers=headers, timeout=120.0) as client:
             while True:
                 params: dict[str, str] = {"page": str(page), "page_size": str(page_size)}
                 if query:
@@ -387,7 +387,7 @@ class MemoryClient(BaseLLMService):
         own brain (platform JWT → that user; INTERNAL_SECRET → seed admin).
         """
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
-        async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
+        async with httpx.AsyncClient(headers=headers, timeout=120.0) as client:
             resp = await client.post(
                 f"{self._api_base_url}/api/memory/text",
                 json={"title": title, "content": content, "tags": tags},
@@ -463,7 +463,7 @@ class MemoryClient(BaseLLMService):
         memories' content into a single plain-text block for the LLM prompt.
         """
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
-        async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
+        async with httpx.AsyncClient(headers=headers, timeout=120.0) as client:
             resp = await client.get(
                 f"{self._api_base_url}/api/memory/search",
                 params={"q": query},

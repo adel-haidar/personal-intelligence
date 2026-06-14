@@ -303,7 +303,14 @@ async def analyse_bank_statement(req: AnalyseRequest, settings: SettingsDep, ide
     missing_months: list[str] = []
 
     for month in months:
-        content = await memory_client.fetch_bank_statement_for_month(month)
+        # A timeout/error fetching one month must not 500 the whole analysis —
+        # treat it as a missing month and continue (memory ops can be slow when
+        # the box is busy embedding/generating).
+        try:
+            content = await memory_client.fetch_bank_statement_for_month(month)
+        except Exception:
+            logger.warning("Failed to fetch bank statement for %s — treating as missing", month, exc_info=True)
+            content = ""
         if content:
             all_statements.append(f"=== BANK STATEMENT {month} ===\n{content}")
         else:
