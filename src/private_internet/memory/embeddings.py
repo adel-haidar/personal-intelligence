@@ -55,9 +55,13 @@ class OllamaEmbedder(Embedder):
 
     dim = 1024
 
-    def __init__(self, url: str, model: str):
+    def __init__(self, url: str, model: str, timeout: float = 120.0):
         self._url = url.rstrip("/")
         self.model_id = model
+        # Generous timeout: the first request after idle cold-loads the model
+        # into RAM (~10s+, longer under memory pressure / swap). Warm calls are
+        # sub-second. 30s was too low and killed cold loads on small hosts.
+        self._timeout = timeout
 
     def embed(self, text: str) -> list[float]:
         req = urllib.request.Request(
@@ -66,7 +70,7 @@ class OllamaEmbedder(Embedder):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=self._timeout) as resp:
             data = json.loads(resp.read())
         embeddings = data.get("embeddings")
         if not embeddings or not embeddings[0]:
