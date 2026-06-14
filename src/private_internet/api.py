@@ -1,11 +1,16 @@
+import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI
 
 from private_internet.auth.oauth import create_oauth_tables
 from private_internet.auth.routes import router as auth_router
 from private_internet.billing.routes import router as billing_router
+from private_internet.brain.db import init_brain_db
+from private_internet.brain.routes import router as brain_router
 from private_internet.config import get_settings
 from private_internet.content.creators import seed_default_creators
 from private_internet.content.db import init_content_db
@@ -54,6 +59,33 @@ def _bootstrap_step(name: str, fn) -> None:
         )
 
 
+async def _nightly_organise_loop() -> None:
+    """Run the Brain Organiser for every onboarded user nightly at 02:00 server
+    time. Runs are serialized (one user at a time) to avoid a burst of parallel
+    Bedrock calls. Disable with BRAIN_ORGANISE_NIGHTLY=false."""
+    from private_internet.brain import organiser
+    from private_internet.users.service import list_onboarded_user_ids
+
+    while True:
+        now = datetime.now()
+        nxt = now.replace(hour=2, minute=0, second=0, microsecond=0)
+        if nxt <= now:
+            nxt += timedelta(days=1)
+        await asyncio.sleep((nxt - now).total_seconds())
+        try:
+            for user_id in list_onboarded_user_ids():
+                try:
+                    organiser.start_run(user_id)
+                    while organiser.get_status(user_id)["status"] == "running":
+                        await asyncio.sleep(5)
+                except organiser.OrganiseAlreadyRunning:
+                    continue
+                except Exception:
+                    logger.exception("nightly organise failed for a user")
+        except Exception:
+            logger.exception("nightly organise loop iteration failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _warn_missing_env()
@@ -65,8 +97,18 @@ async def lifespan(app: FastAPI):
     _bootstrap_step("migrate_multi_tenancy", migrate_multi_tenancy)
     # SaaS columns/tables depend on users + content_creators already existing.
     _bootstrap_step("migrate_saas", migrate_saas)
+    # Brain Organiser columns/tables depend on the memories table existing.
+    _bootstrap_step("init_brain_db", init_brain_db)
+
+    nightly_task = None
+    if os.getenv("BRAIN_ORGANISE_NIGHTLY", "true").lower() != "false":
+        nightly_task = asyncio.create_task(_nightly_organise_loop())
+
     async with mcp.session_manager.run():
         yield
+
+    if nightly_task is not None:
+        nightly_task.cancel()
 
 
 app = FastAPI(title="Private Internet API", lifespan=lifespan)
@@ -96,5 +138,6 @@ app.include_router(user_status_router)
 app.include_router(memory_router)
 app.include_router(content_router)
 app.include_router(billing_router)
+app.include_router(brain_router)
 
 app.mount("/mcp", _mcp_app)

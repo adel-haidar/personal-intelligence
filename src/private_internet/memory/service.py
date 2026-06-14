@@ -125,7 +125,7 @@ def search_memories(query: str, *, user_id: str, limit: int = 5) -> list[Memory]
     cur.execute(
         """SELECT *, embedding <=> %s::vector AS distance
            FROM memories
-           WHERE user_id = %s
+           WHERE user_id = %s AND merged_into IS NULL
            ORDER BY distance
            LIMIT %s""",
         (str(embedding), user_id, limit),
@@ -144,7 +144,7 @@ def count_memories(*, user_id: str) -> tuple[int, datetime | None]:
     cur = conn.cursor()
     cur.execute(
         """SELECT COUNT(*), MAX(GREATEST(created_at, COALESCE(updated_at, created_at)))
-           FROM memories WHERE user_id = %s""",
+           FROM memories WHERE user_id = %s AND merged_into IS NULL""",
         (user_id,),
     )
     total, last = cur.fetchone()
@@ -173,25 +173,30 @@ def list_memories(
         # than its filename. (Semantic ranking is available via search_memories.)
         cur.execute(
             """SELECT COUNT(*) FROM memories
-               WHERE user_id = %s AND (title ILIKE %s OR tags ILIKE %s OR content ILIKE %s)""",
+               WHERE user_id = %s AND merged_into IS NULL
+                 AND (title ILIKE %s OR tags ILIKE %s OR content ILIKE %s)""",
             (user_id, like, like, like),
         )
         total = cur.fetchone()["count"]
         cur.execute(
             """SELECT memory_id, title, tags, created_at, updated_at, content
                FROM memories
-               WHERE user_id = %s AND (title ILIKE %s OR tags ILIKE %s OR content ILIKE %s)
+               WHERE user_id = %s AND merged_into IS NULL
+                 AND (title ILIKE %s OR tags ILIKE %s OR content ILIKE %s)
                ORDER BY created_at DESC
                LIMIT %s OFFSET %s""",
             (user_id, like, like, like, page_size, offset),
         )
     else:
-        cur.execute("SELECT COUNT(*) FROM memories WHERE user_id = %s", (user_id,))
+        cur.execute(
+            "SELECT COUNT(*) FROM memories WHERE user_id = %s AND merged_into IS NULL",
+            (user_id,),
+        )
         total = cur.fetchone()["count"]
         cur.execute(
             """SELECT memory_id, title, tags, created_at, updated_at, content
                FROM memories
-               WHERE user_id = %s
+               WHERE user_id = %s AND merged_into IS NULL
                ORDER BY created_at DESC
                LIMIT %s OFFSET %s""",
             (user_id, page_size, offset),
@@ -271,6 +276,27 @@ def update_memory(
         created_at=existing.created_at,
         updated_at=updated_at,
     )
+
+
+def soft_delete_into(source_ids: list[str], target_id: str, *, user_id: str) -> int:
+    """Mark `source_ids` as merged into `target_id` (Brain Organiser soft-delete).
+
+    Never hard-deletes: the rows stay, but `merged_into` excludes them from every
+    user-facing read. Returns the number of rows updated."""
+    assert user_id is not None, "user_id must be set before any memory operation"
+    if not source_ids:
+        return 0
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE memories SET merged_into = %s WHERE memory_id = ANY(%s) AND user_id = %s",
+        (target_id, list(source_ids), user_id),
+    )
+    updated = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    return updated
 
 
 def delete_memory(memory_id: str, *, user_id: str) -> bool:

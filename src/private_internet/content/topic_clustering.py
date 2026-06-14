@@ -105,7 +105,7 @@ def fetch_memory_vectors(user_id: str, limit: int = MAX_MEMORIES) -> list[dict]:
         cur.execute(
             """SELECT memory_id, title, content, tags, created_at, embedding
                FROM memories
-               WHERE user_id = %s AND embedding IS NOT NULL
+               WHERE user_id = %s AND embedding IS NOT NULL AND merged_into IS NULL
                ORDER BY created_at DESC
                LIMIT %s""",
             (user_id, limit),
