@@ -39,6 +39,18 @@ class Settings(BaseSettings):
 
     aws_region: str = "eu-central-1"
 
+    # ── Brain embeddings (self-hosted, Bedrock-free path) ───────
+    # The brain owns its embedding model so the memory store can run on any host
+    # (AWS now, user-owned hardware later). "bedrock" keeps the legacy Amazon
+    # Titan v2 path; "ollama" uses a local Ollama server. Both emit 1024-d
+    # vectors, so the memories.embedding vector(1024) column is unchanged.
+    # Flip to "ollama" only AFTER re-embedding existing rows
+    # (scripts/reembed_memories.py) — bge-m3 vectors are not comparable to Titan
+    # vectors, so querying one against the other returns meaningless results.
+    embedding_backend: str = "bedrock"            # "bedrock" | "ollama"
+    embedding_url: str = "http://127.0.0.1:11434"  # Ollama server (localhost)
+    embedding_model: str = "bge-m3"                # Ollama model tag, 1024-d
+
     upload_dir: str = "/uploads"
 
     # ── Billing (Stripe) ────────────────────────────────────────

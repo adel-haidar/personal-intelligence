@@ -1,13 +1,11 @@
 import uuid
-import json
-import boto3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping
 from psycopg2.extras import RealDictCursor
 
-from private_internet.config import get_settings
 from private_internet.database import _connect
+from private_internet.memory.embeddings import get_embedder
 
 # Every function in this module is tenant-scoped. # MUST SCOPE BY USER
 # user_id is required; callers resolve it from RequestContext (API) or the
@@ -22,21 +20,6 @@ class Memory:
     memory_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime | None = None
-
-
-def _get_bedrock_client():
-    s = get_settings()
-    return boto3.client("bedrock-runtime", region_name=s.aws_region)
-
-
-def _get_embedding(text: str) -> list[float]:
-    bedrock = _get_bedrock_client()
-    response = bedrock.invoke_model(
-        modelId="amazon.titan-embed-text-v2:0",
-        body=json.dumps({"inputText": text}),
-    )
-    result = json.loads(response["body"].read())
-    return result["embedding"]
 
 
 def init_db() -> None:
@@ -54,6 +37,9 @@ def init_db() -> None:
         )
     """)
     cur.execute("ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ")
+    # Records which embedding model produced each vector, so a backend switch or
+    # model upgrade can detect stale vectors and re-embed (see embeddings.py).
+    cur.execute("ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_model TEXT")
     # user_id column + backfill is handled by core/tenancy.py at startup.
     conn.commit()
     cur.close()
@@ -72,15 +58,18 @@ def save_memory(
     created_at = datetime.now(timezone.utc)
     tags = tags or []
     text = f"{title}\n{content}"
-    embedding = _get_embedding(text)
+    embedder = get_embedder()
+    embedding = embedder.embed(text)
     embedded_str = str(embedding).replace(" ", "")
 
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO memories (memory_id, title, content, tags, created_at, embedding, user_id)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-        (memory_id, title, content, ",".join(tags), created_at, embedded_str, user_id),
+        """INSERT INTO memories
+               (memory_id, title, content, tags, created_at, embedding, embedding_model, user_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+        (memory_id, title, content, ",".join(tags), created_at, embedded_str,
+         embedder.model_id, user_id),
     )
     conn.commit()
     cur.close()
@@ -115,10 +104,10 @@ def fetch_memory(memory_id: str, *, user_id: str) -> Memory | None:
 
 def search_memories(query: str, *, user_id: str, limit: int = 5) -> list[Memory]:
     """Semantic search over memory CONTENT via pgvector cosine distance on the
-    Titan embedding. Returns the `limit` most semantically-relevant memories
-    (full content), NOT a title/tag substring match."""
+    brain's embedding (see embeddings.py). Returns the `limit` most
+    semantically-relevant memories (full content), NOT a title/tag substring match."""
     assert user_id is not None, "user_id must be set before any memory operation"
-    embedding = _get_embedding(query)
+    embedding = get_embedder().embed(query)
 
     conn = _connect()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -248,14 +237,16 @@ def update_memory(
     conn = _connect()
     cur = conn.cursor()
     if new_title != existing.title or new_content != existing.content:
-        embedding = _get_embedding(f"{new_title}\n{new_content}")
+        embedder = get_embedder()
+        embedding = embedder.embed(f"{new_title}\n{new_content}")
         embedded_str = str(embedding).replace(" ", "")
         cur.execute(
             """UPDATE memories
-               SET title = %s, content = %s, tags = %s, updated_at = %s, embedding = %s
+               SET title = %s, content = %s, tags = %s, updated_at = %s,
+                   embedding = %s, embedding_model = %s
                WHERE memory_id = %s AND user_id = %s""",
             (new_title, new_content, ",".join(new_tags), updated_at, embedded_str,
-             memory_id, user_id),
+             embedder.model_id, memory_id, user_id),
         )
     else:
         cur.execute(
