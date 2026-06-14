@@ -26,23 +26,26 @@ async def run_daily_health_workflow(
     model_id: str,
     mcp_url: str | None = None,
     mcp_token: str | None = None,
+    *,
+    user_id: str,
 ) -> HealthInsightResponse:
-    """Fixed-order, non-agentic workflow. Steps run sequentially every time."""
+    """Fixed-order, non-agentic workflow. Steps run sequentially every time.
+    # MUST SCOPE BY USER — all metric reads + the memory save are for `user_id`."""
 
     # Step 1 — Compute today's summary (pure Python, no LLM)
-    summary = await compute_daily_summary(pool, target_date)
+    summary = await compute_daily_summary(pool, target_date, user_id=user_id)
 
     # Step 2 — Pull last 14 days for flag detection (pure Python, no LLM)
     history = []
     for i in range(1, 15):
         past = target_date - timedelta(days=i)
-        history.append(await compute_daily_summary(pool, past))
+        history.append(await compute_daily_summary(pool, past, user_id=user_id))
 
-    flags = await detect_flags(pool, summary, history)
+    flags = await detect_flags(pool, summary, history, user_id=user_id)
 
     # Step 3 — Per-source data availability: did the scale / watch report today,
     # and if not, when is new data expected? (pure Python, no LLM)
-    availability = await compute_source_availability(pool, target_date)
+    availability = await compute_source_availability(pool, target_date, user_id=user_id)
 
     # Step 4 — Fetch medical records from MCP memory (titles are reported back
     # to the caller as the list of documents the analysis is based on)

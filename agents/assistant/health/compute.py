@@ -36,16 +36,17 @@ def _day_window(target_date: date, days_back: int) -> tuple[datetime, datetime]:
     return start, end
 
 
-async def compute_daily_summary(pool: asyncpg.Pool, target_date: date) -> DailyHealthSummary:
-    """Compute health summary for a given date. All fields optional — never raises on missing data."""
+async def compute_daily_summary(pool: asyncpg.Pool, target_date: date, *, user_id: str) -> DailyHealthSummary:
+    """Compute health summary for a given date. All fields optional — never raises on missing data.
+    # MUST SCOPE BY USER"""
     try:
-        return await _compute(pool, target_date)
+        return await _compute(pool, target_date, user_id)
     except Exception:
         logger.exception("Failed to compute health summary for %s", target_date)
         return DailyHealthSummary(date=target_date)
 
 
-async def _compute(pool: asyncpg.Pool, target_date: date) -> DailyHealthSummary:
+async def _compute(pool: asyncpg.Pool, target_date: date, user_id: str) -> DailyHealthSummary:
     day_start = datetime(target_date.year, target_date.month, target_date.day,
                          0, 0, 0, tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=1)
@@ -53,18 +54,18 @@ async def _compute(pool: asyncpg.Pool, target_date: date) -> DailyHealthSummary:
     # ── Weight ─────────────────────────────────────────────────────────────
 
     # Latest weight on target_date or within 2 days prior
-    weight_row = await fetch_latest_metric(pool, "weight_kg", day_end, lookback_days=2)
+    weight_row = await fetch_latest_metric(pool, "weight_kg", day_end, lookback_days=2, user_id=user_id)
     weight_kg = round(weight_row["value"], 2) if weight_row else None
 
     # 7-day average
     w7_start, w7_end = _day_window(target_date, 7)
-    w7_rows = await fetch_metrics(pool, "weight_kg", w7_start, w7_end)
+    w7_rows = await fetch_metrics(pool, "weight_kg", w7_start, w7_end, user_id=user_id)
     w7_values = [r["value"] for r in w7_rows]
     weight_7day_avg = round(_mean(w7_values), 2) if w7_values else None
 
     # 14-day trend slope (kg/day → kg/week)
     w14_start, w14_end = _day_window(target_date, 14)
-    w14_rows = await fetch_metrics(pool, "weight_kg", w14_start, w14_end)
+    w14_rows = await fetch_metrics(pool, "weight_kg", w14_start, w14_end, user_id=user_id)
 
     weight_trend_kg_per_week: Optional[float] = None
     if len(w14_rows) >= 3:
@@ -89,43 +90,43 @@ async def _compute(pool: asyncpg.Pool, target_date: date) -> DailyHealthSummary:
 
     # ── Body fat ────────────────────────────────────────────────────────────
 
-    bf_row = await fetch_latest_metric(pool, "body_fat_percent", day_end, lookback_days=7)
+    bf_row = await fetch_latest_metric(pool, "body_fat_percent", day_end, lookback_days=7, user_id=user_id)
     body_fat_percent = round(bf_row["value"], 1) if bf_row else None
 
     # ── Resting HR ──────────────────────────────────────────────────────────
 
-    hr_row = await fetch_latest_metric(pool, "resting_hr", day_end, lookback_days=1)
+    hr_row = await fetch_latest_metric(pool, "resting_hr", day_end, lookback_days=1, user_id=user_id)
     resting_hr = round(hr_row["value"], 1) if hr_row else None
 
     hr7_start, hr7_end = _day_window(target_date, 7)
-    hr7_rows = await fetch_metrics(pool, "resting_hr", hr7_start, hr7_end)
+    hr7_rows = await fetch_metrics(pool, "resting_hr", hr7_start, hr7_end, user_id=user_id)
     hr7_values = [r["value"] for r in hr7_rows]
     resting_hr_7day_avg = round(_mean(hr7_values), 1) if hr7_values else None
 
     # ── HRV ─────────────────────────────────────────────────────────────────
 
-    hrv_row = await fetch_latest_metric(pool, "hrv_ms", day_end, lookback_days=1)
+    hrv_row = await fetch_latest_metric(pool, "hrv_ms", day_end, lookback_days=1, user_id=user_id)
     hrv_ms = round(hrv_row["value"], 1) if hrv_row else None
 
     # ── Sleep ────────────────────────────────────────────────────────────────
 
-    sleep_rows = await fetch_metrics(pool, "sleep_duration_min", day_start, day_end)
+    sleep_rows = await fetch_metrics(pool, "sleep_duration_min", day_start, day_end, user_id=user_id)
     # Take the largest sleep session on this day (the main sleep, not a nap)
     sleep_duration_min: Optional[float] = None
     if sleep_rows:
         sleep_duration_min = round(max(r["value"] for r in sleep_rows), 1)
 
-    score_rows = await fetch_metrics(pool, "sleep_score", day_start, day_end)
+    score_rows = await fetch_metrics(pool, "sleep_score", day_start, day_end, user_id=user_id)
     sleep_score: Optional[float] = round(max(r["value"] for r in score_rows), 1) if score_rows else None
 
     # ── Steps ────────────────────────────────────────────────────────────────
 
-    step_rows = await fetch_metrics(pool, "steps", day_start, day_end)
+    step_rows = await fetch_metrics(pool, "steps", day_start, day_end, user_id=user_id)
     steps: Optional[int] = int(sum(r["value"] for r in step_rows)) if step_rows else None
 
     # ── Active energy ────────────────────────────────────────────────────────
 
-    energy_rows = await fetch_metrics(pool, "active_energy_kcal", day_start, day_end)
+    energy_rows = await fetch_metrics(pool, "active_energy_kcal", day_start, day_end, user_id=user_id)
     active_energy_kcal: Optional[float] = round(sum(r["value"] for r in energy_rows), 1) if energy_rows else None
 
     return DailyHealthSummary(
@@ -165,15 +166,18 @@ def _median_gap_days(days: list[date]) -> int:
 async def compute_source_availability(
     pool: asyncpg.Pool,
     target_date: date,
+    *,
+    user_id: str,
 ) -> list[SourceAvailability]:
     """For each device source: is there data on target_date, and if not, when is
-    new data expected (last data day + the source's observed reporting cadence)?"""
+    new data expected (last data day + the source's observed reporting cadence)?
+    # MUST SCOPE BY USER"""
     day_end = datetime(target_date.year, target_date.month, target_date.day,
                        23, 59, 59, tzinfo=timezone.utc) + timedelta(seconds=1)
 
     result: list[SourceAvailability] = []
     for device, sources in _DEVICE_SOURCES.items():
-        days = await fetch_source_days(pool, sources, day_end, days=60)
+        days = await fetch_source_days(pool, sources, day_end, days=60, user_id=user_id)
         available = target_date in days
         last_data = max(days) if days else None
 
@@ -197,8 +201,10 @@ async def detect_flags(
     pool: asyncpg.Pool,
     summary: DailyHealthSummary,
     history: list[DailyHealthSummary],
+    *,
+    user_id: str,
 ) -> list[str]:
-    """Rule-based flag detection. No LLM — pure thresholds."""
+    """Rule-based flag detection. No LLM — pure thresholds. # MUST SCOPE BY USER"""
     flags: list[str] = []
     all_days = [summary] + list(history)  # index 0 = today, 1 = yesterday, …
 
@@ -237,7 +243,7 @@ async def detect_flags(
 
     # low_hrv_3_days: HRV below 30-day avg by >15% for 3 consecutive days
     if summary.hrv_ms is not None:
-        hrv_30day = await _get_30day_hrv_avg(pool, summary.date)
+        hrv_30day = await _get_30day_hrv_avg(pool, summary.date, user_id=user_id)
         if hrv_30day is not None and hrv_30day > 0:
             threshold = hrv_30day * 0.85
             consecutive_low_hrv = 0
@@ -251,7 +257,7 @@ async def detect_flags(
 
     # resting_hr_elevated: HR > 30-day avg + 5 for 2+ consecutive days
     if summary.resting_hr is not None:
-        hr_30day = await _get_30day_hr_avg(pool, summary.date)
+        hr_30day = await _get_30day_hr_avg(pool, summary.date, user_id=user_id)
         if hr_30day is not None:
             threshold = hr_30day + 5
             consecutive_high_hr = 0
@@ -266,17 +272,17 @@ async def detect_flags(
     return flags
 
 
-async def _get_30day_hrv_avg(pool: asyncpg.Pool, target_date: date) -> Optional[float]:
+async def _get_30day_hrv_avg(pool: asyncpg.Pool, target_date: date, *, user_id: str) -> Optional[float]:
     day_end = datetime(target_date.year, target_date.month, target_date.day,
                        23, 59, 59, tzinfo=timezone.utc) + timedelta(seconds=1)
-    rows = await fetch_metrics(pool, "hrv_ms", day_end - timedelta(days=30), day_end)
+    rows = await fetch_metrics(pool, "hrv_ms", day_end - timedelta(days=30), day_end, user_id=user_id)
     values = [r["value"] for r in rows]
     return _mean(values)
 
 
-async def _get_30day_hr_avg(pool: asyncpg.Pool, target_date: date) -> Optional[float]:
+async def _get_30day_hr_avg(pool: asyncpg.Pool, target_date: date, *, user_id: str) -> Optional[float]:
     day_end = datetime(target_date.year, target_date.month, target_date.day,
                        23, 59, 59, tzinfo=timezone.utc) + timedelta(seconds=1)
-    rows = await fetch_metrics(pool, "resting_hr", day_end - timedelta(days=30), day_end)
+    rows = await fetch_metrics(pool, "resting_hr", day_end - timedelta(days=30), day_end, user_id=user_id)
     values = [r["value"] for r in rows]
     return _mean(values)

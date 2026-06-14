@@ -21,7 +21,7 @@ from assistant.health.models import (
     SOURCE,
 )
 from assistant.health.workflow import fetch_from_mcp_memory, run_daily_health_workflow
-from assistant.shared.auth import require_auth
+from assistant.shared.auth import require_user
 from assistant.shared.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -30,14 +30,25 @@ router = APIRouter(tags=["health"])
 TREND_METRICS = ["weight_kg", "resting_hr", "sleep_duration_min", "steps",
                  "hrv_ms", "active_energy_kcal", "body_fat_percent"]
 
+_seed_admin_id: str | None = None
 
-def _get_fresh_token() -> str:
-    """Same-host auth to the memory API uses the shared INTERNAL_SECRET, which
-    Service A resolves to the seed admin. Stable — no OAuth token to refresh."""
-    secret = os.environ.get("INTERNAL_SECRET")
-    if not secret:
-        raise RuntimeError("INTERNAL_SECRET is not configured")
-    return secret
+
+async def _resolve_user_id(ident: dict, pool) -> str:
+    """The effective user_id to scope health data by.  # MUST SCOPE BY USER
+
+    Platform JWT callers → their own user_id. Internal (cron via INTERNAL_SECRET)
+    and legacy OAuth callers carry no user_id, so they attribute to the seed admin
+    — preserving the owner's existing daily pipeline."""
+    if ident.get("user_id"):
+        return ident["user_id"]
+    global _seed_admin_id
+    if _seed_admin_id is None:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT id FROM users WHERE is_admin = true LIMIT 1")
+        if not row:
+            raise HTTPException(503, "No admin user to attribute internal health data to")
+        _seed_admin_id = str(row["id"])
+    return _seed_admin_id
 
 
 @lru_cache
@@ -57,12 +68,13 @@ async def _pool():
 @router.post("/health/import/apple-health")
 async def import_apple_health(
     file: UploadFile = File(...),
-    _: str = Depends(require_auth),
+    ident: dict = Depends(require_user),
 ):
     """Accept the Apple Health export — either the raw export.xml OR the
     'Export All Health Data' .zip (which contains apple_health_export/export.xml).
-    Streams to /tmp, parses, bulk-inserts new rows."""
+    Streams to /tmp, parses, bulk-inserts new rows for the calling user."""
     pool = await _pool()
+    user_id = await _resolve_user_id(ident, pool)
 
     # Stream to temp file to avoid loading 100MB+ into memory
     with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tmp:
@@ -97,7 +109,7 @@ async def import_apple_health(
     if not metrics:
         return {"inserted": 0, "date_range": [None, None]}
 
-    inserted = await bulk_insert(pool, metrics)
+    inserted = await bulk_insert(pool, metrics, user_id=user_id)
 
     dates = [m.recorded_at.date().isoformat() for m in metrics]
     date_range = [min(dates), max(dates)]
@@ -110,10 +122,11 @@ async def import_apple_health(
 @router.post("/health/manual-entry")
 async def manual_entry(
     body: ManualEntryRequest,
-    _: str = Depends(require_auth),
+    ident: dict = Depends(require_user),
 ):
     """Insert a single metric with source='manual'. For days when the export is stale."""
     pool = await _pool()
+    user_id = await _resolve_user_id(ident, pool)
     from assistant.health.db import insert_one
 
     metric = HealthMetric(
@@ -123,7 +136,7 @@ async def manual_entry(
         unit=body.unit,
         source="manual",
     )
-    saved = await insert_one(pool, metric)
+    saved = await insert_one(pool, metric, user_id=user_id)
     return {"saved": saved}
 
 
@@ -132,20 +145,19 @@ async def manual_entry(
 @router.post("/health/run-daily/{target_date}", response_model=HealthInsightResponse)
 async def run_daily(
     target_date: date,
-    _: str = Depends(require_auth),
+    ident: dict = Depends(require_user),
 ):
-    """Trigger the full workflow for a specific date (used by cron / manual trigger)."""
+    """Trigger the full workflow for a specific date (used by cron / manual trigger).
+    Scopes metric reads to the caller and forwards the caller's token so the summary
+    saves to the caller's brain (cron's INTERNAL_SECRET → seed admin, unchanged)."""
     settings = get_settings()
     pool = await _pool()
+    user_id = await _resolve_user_id(ident, pool)
     bedrock_client = _bedrock(settings.aws_region)
 
     mcp_url = settings.mcp_memory_url
-    mcp_token = None
-    if mcp_url:
-        try:
-            mcp_token = _get_fresh_token()
-        except Exception:
-            logger.warning("Could not get MCP token — memory save will be skipped", exc_info=True)
+    # Forward the caller's bearer so MCP memory scopes to the right tenant.
+    mcp_token = ident["token"] if mcp_url else None
 
     return await run_daily_health_workflow(
         target_date=target_date,
@@ -154,6 +166,7 @@ async def run_daily(
         model_id=settings.bedrock_model_id,
         mcp_url=mcp_url,
         mcp_token=mcp_token,
+        user_id=user_id,
     )
 
 
@@ -162,19 +175,15 @@ async def run_daily(
 @router.get("/health/daily/{target_date}", response_model=HealthInsightResponse)
 async def get_daily(
     target_date: date,
-    _: str = Depends(require_auth),
+    ident: dict = Depends(require_user),
 ):
-    """Return a previously computed daily summary from MCP memory (no LLM re-run)."""
+    """Return a previously computed daily summary from the caller's MCP memory (no LLM re-run)."""
     settings = get_settings()
     if not settings.mcp_memory_url:
         raise HTTPException(503, "MCP_MEMORY_URL not configured")
 
-    try:
-        token = _get_fresh_token()
-    except Exception as exc:
-        raise HTTPException(503, f"Could not obtain MCP auth token: {exc}") from exc
-
-    result = await fetch_from_mcp_memory(target_date, settings.mcp_memory_url, token)
+    # Forward the caller's token → MCP memory scopes the lookup to their tenant.
+    result = await fetch_from_mcp_memory(target_date, settings.mcp_memory_url, ident["token"])
     if not result:
         # Do NOT raise 404 here: CloudFront rewrites 403/404 responses to the
         # SPA's index.html (status 200), so the frontend would receive HTML
@@ -198,11 +207,12 @@ async def get_daily(
 @router.get("/health/trends")
 async def get_trends(
     days: int = Query(default=30, ge=1, le=365),
-    _: str = Depends(require_auth),
+    ident: dict = Depends(require_user),
 ):
     """Return daily time series for charting: weight, resting_hr, sleep, steps, etc."""
     pool = await _pool()
-    series = await fetch_trends(pool, TREND_METRICS, days)
+    user_id = await _resolve_user_id(ident, pool)
+    series = await fetch_trends(pool, TREND_METRICS, days, user_id=user_id)
     return {"days": days, "series": series}
 
 
@@ -211,8 +221,9 @@ async def get_trends(
 @router.get("/health/summary/{target_date}", response_model=DailyHealthSummary)
 async def get_summary(
     target_date: date,
-    _: str = Depends(require_auth),
+    ident: dict = Depends(require_user),
 ):
     """Compute and return a daily summary on-demand (no LLM call, no insight)."""
     pool = await _pool()
-    return await compute_daily_summary(pool, target_date)
+    user_id = await _resolve_user_id(ident, pool)
+    return await compute_daily_summary(pool, target_date, user_id=user_id)
