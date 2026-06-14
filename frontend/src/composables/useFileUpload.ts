@@ -35,7 +35,7 @@ export function useFileUpload() {
     return new Promise((resolve, reject) => {
       const xhr  = new XMLHttpRequest()
       const form = new FormData()
-      form.append('file', record.file)
+      form.append('files', record.file)
 
       xhr.open('POST', UPLOAD_URL)
       xhr.setRequestHeader('Authorization', `Bearer ${token}`)

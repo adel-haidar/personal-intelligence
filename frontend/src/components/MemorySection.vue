@@ -94,7 +94,7 @@ async function uploadFile(file: File) {
       token = await requireAuth()
     }
     const form = new FormData()
-    form.append('file', file)
+    form.append('files', file)
     const res = await fetch(`${API_BASE}/api/file`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },

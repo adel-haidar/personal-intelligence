@@ -85,7 +85,7 @@ async function uploadToBrain(file: File): Promise<boolean> {
   try {
     const token = await requireAuth()
     const fd = new FormData()
-    fd.append('file', file)
+    fd.append('files', file)
     const res = await fetch(`${API_BASE}/api/file`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },

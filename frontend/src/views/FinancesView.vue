@@ -108,7 +108,7 @@ async function onPickFile(e: Event) {
   try {
     const token = await requireAuth()
     const fd = new FormData()
-    fd.append('file', file)
+    fd.append('files', file)
     const res = await fetch(`${API_BASE}/api/file`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd })
     toast(res.ok ? 'File added — run analysis to see your summary' : 'Upload failed', res.ok ? 'success' : 'error')
   } catch {

@@ -154,7 +154,7 @@ async function onDeviceFiles(device: DeviceDef, files: File[]) {
   try {
     const token = await requireAuth()
     const fd = new FormData()
-    fd.append('file', file)
+    fd.append('files', file)
     const res = await fetch(`${API_BASE}/api/file`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd })
     toast(res.ok ? 'File added to your brain' : 'Upload failed', res.ok ? 'success' : 'error')
     if (res.ok) addDeviceOpen.value = false
