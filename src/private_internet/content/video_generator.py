@@ -230,7 +230,7 @@ class VideoImageGenerator(PostImageGenerator):
     ) -> bytes:
         prompt = section.image_prompt + " cinematic, 16:9, dark editorial style, no text"
         try:
-            return await self._invoke_nova_canvas(
+            return await self._generate_image(
                 prompt,
                 width=VIDEO_WIDTH,
                 height=VIDEO_HEIGHT,
@@ -252,7 +252,7 @@ class VideoImageGenerator(PostImageGenerator):
         intro = script.sections[0]
         prompt = intro.image_prompt + " bold title overlay style, high contrast"
         try:
-            return await self._invoke_nova_canvas(
+            return await self._generate_image(
                 prompt,
                 width=VIDEO_WIDTH,
                 height=VIDEO_HEIGHT,

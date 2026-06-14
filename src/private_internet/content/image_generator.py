@@ -31,7 +31,7 @@ class PostImageGenerator:
         Nova Canvas renders it. Returns (image_bytes, image_prompt).
         """
         image_prompt = await self._generate_image_prompt(topic, creator, post_body)
-        image_bytes = await self._invoke_nova_canvas(image_prompt)
+        image_bytes = await self._generate_image(image_prompt)
         return image_bytes, image_prompt
 
     async def _generate_image_prompt(self, topic: dict, creator: dict, post_body: str) -> str:
@@ -49,6 +49,25 @@ class PostImageGenerator:
             max_tokens=256,
         )
         return text.strip()
+
+    async def _generate_image(
+        self,
+        image_prompt: str,
+        width: int = 1024,
+        height: int = 1024,
+        negative_text: str = "text, watermark, logo, blurry, low quality",
+    ) -> bytes:
+        """Dispatch to the configured image backend. fal.ai is the active default
+        (Bedrock image models are EOL'd here); callers keep a gradient fallback."""
+        settings = get_settings()
+        if (settings.image_backend or "fal").lower() == "fal":
+            from private_internet.content.fal_image import generate_image
+            return await generate_image(
+                image_prompt, width, height, negative_text=negative_text
+            )
+        return await self._invoke_nova_canvas(
+            image_prompt, width=width, height=height, negative_text=negative_text
+        )
 
     async def _invoke_nova_canvas(
         self,

@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     embedding_url: str = "http://127.0.0.1:11434"  # Ollama server (localhost)
     embedding_model: str = "bge-m3"                # Ollama model tag, 1024-d
 
+    # ── Image generation (fal.ai) ───────────────────────────────
+    # Bedrock's image models (Nova Canvas, Titan G2) are EOL'd/legacy-revoked in
+    # this account, so SIGNAL slides + PULSE post images fall back to gradients.
+    # fal.ai FLUX is the active backend (cheap: schnell ~$0.003/image). On any
+    # failure (incl. unfunded balance) the pipeline still falls back to a gradient.
+    image_backend: str = "fal"                     # "fal" | "bedrock"
+    fal_api_key: str = ""
+    fal_image_model: str = "fal-ai/flux/schnell"   # cheap/fast distilled FLUX
+
     upload_dir: str = "/uploads"
 
     # ── Billing (Stripe) ────────────────────────────────────────
