@@ -11,10 +11,12 @@ from private_internet.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Tool-use (forced tool_choice) calls need a Claude model. Mistral Small does not
-# support the converse toolConfig reliably, so PULSE's structured generation uses
-# the same Claude default the brain organiser uses (known-good in eu-central-1).
-PULSE_MODEL_DEFAULT = "eu.anthropic.claude-3-5-sonnet-20240620-v1:0"
+# Forced tool_choice needs a model that supports it. Mistral/Pixtral do NOT, and
+# the Anthropic Claude models on Bedrock require an AWS Marketplace agreement
+# (the Haiku 4.5 one expired 2026-06-15 → AccessDenied). Amazon Nova is
+# first-party (no agreement), enabled in eu-central-1, and supports forced tools,
+# so it is the safe default. Override per-instance with BEDROCK_PULSE_MODEL_ID.
+PULSE_MODEL_DEFAULT = "eu.amazon.nova-pro-v1:0"
 
 
 def bedrock_text_region() -> str:
@@ -43,8 +45,9 @@ async def converse_text(
     the converse `usage` dict ({inputTokens, outputTokens, totalTokens}).
     Raises if both models fail.
     """
-    # Primary text model: Mistral Small (available in eu-central-1).
-    model_id = os.getenv("BEDROCK_TEXT_MODEL_ID", "mistral.mistral-small-2402-v1:0")
+    # Primary text model: Amazon Nova Pro (first-party, eu-central-1, no
+    # Marketplace agreement). Override with BEDROCK_TEXT_MODEL_ID.
+    model_id = os.getenv("BEDROCK_TEXT_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 
     def invoke():
         kwargs = {
@@ -59,8 +62,8 @@ async def converse_text(
             response = client.converse(modelId=model_id, **kwargs)
         except Exception as e:
             logger.warning(f"Primary text model {model_id} failed: {e}. Trying Nova fallback.")
-            # Fallback: Nova in eu-west-1.
-            fallback_model = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-2-lite-v1:0")
+            # Fallback: Nova Lite in eu-west-1.
+            fallback_model = os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-lite-v1:0")
             client = boto3.client("bedrock-runtime", region_name=_bedrock_nova_region())
             response = client.converse(modelId=fallback_model, **kwargs)
         text = response["output"]["message"]["content"][0]["text"]
