@@ -1,11 +1,17 @@
-"""Video script + slide image generation for the SIGNAL pipeline (Phase 4, Tasks 1–2)."""
+"""Video script + slide image generation for the SIGNAL pipeline (Phase 4, Tasks 1–2).
+
+Two script generators live here:
+  - VideoScriptGenerator   — the legacy 5-section short script (slide-based videos)
+  - SceneScriptGenerator   — the scene-by-scene breakdown for long-form
+                             scene-stitching (SIGNAL 3–5 min, STORIES 6–45 min)
+"""
 
 import json
 import logging
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
-from private_internet.content.llm import converse_text
+from private_internet.content.llm import converse_text, converse_tool
 from private_internet.content.image_generator import PostImageGenerator
 
 logger = logging.getLogger(__name__)
@@ -14,6 +20,72 @@ SECTION_IDS = ["INTRO", "SECTION_1", "SECTION_2", "SECTION_3", "OUTRO"]
 
 VIDEO_WIDTH = 1280
 VIDEO_HEIGHT = 720
+
+# SIGNAL long-form duration target (seconds). STORIES targets live in
+# content/stories/generator.py.
+SIGNAL_DURATION_TARGETS = {
+    "standard": (180, 300),          # 3–5 minutes
+}
+
+# Roughly 8-second clips, so a 3–5 min SIGNAL video is ~22–38 scenes.
+_SCENE_SECONDS = 8
+
+
+# Scene-by-scene script tool — forced on the Bedrock call. One scene ≈ 8 seconds;
+# narration_text is the spoken line for that scene, visual_description is the
+# abstract beat (translated to a Kling prompt separately by the assembler).
+SCRIPT_WITH_SCENES_TOOL = {
+    "name": "generate_video_script",
+    "description": "Generate a scene-by-scene video script for scene-stitched assembly",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "total_duration_seconds": {
+                "type": "integer",
+                "description": "Target total duration in seconds",
+            },
+            "scenes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "scene_number": {"type": "integer"},
+                        "narration_text": {
+                            "type": "string",
+                            "description": "The spoken narration for this scene "
+                                           "only. Will be passed to ElevenLabs.",
+                        },
+                        "visual_description": {
+                            "type": "string",
+                            "description": "Abstract description of what this "
+                                           "scene is about. Will be translated "
+                                           "to a Kling prompt separately.",
+                        },
+                        "duration_seconds": {
+                            "type": "integer",
+                            "description": "Target duration for this scene's clip",
+                        },
+                        "scene_type": {
+                            "type": "string",
+                            "enum": [
+                                "establishing",
+                                "development",
+                                "transition",
+                                "climax",
+                                "resolution",
+                            ],
+                        },
+                    },
+                    "required": ["scene_number", "narration_text",
+                                 "visual_description", "duration_seconds",
+                                 "scene_type"],
+                },
+            },
+        },
+        "required": ["title", "total_duration_seconds", "scenes"],
+    },
+}
 
 
 @dataclass
@@ -39,6 +111,105 @@ class VideoScript:
                 for s in self.sections
             ],
         })
+
+
+@dataclass
+class SceneScript:
+    """A scene-by-scene breakdown for long-form scene-stitched assembly."""
+    title: str
+    total_duration_seconds: int
+    scenes: List[dict]   # each: scene_number, narration_text, visual_description,
+                         #       duration_seconds, scene_type
+
+    @property
+    def narration_text(self) -> str:
+        """Full narration: every scene's spoken line joined in order."""
+        return " ".join(
+            (s.get("narration_text") or "").strip()
+            for s in self.scenes
+            if (s.get("narration_text") or "").strip()
+        )
+
+
+class SceneScriptGenerator:
+    """Generates a scene-by-scene script via a forced Bedrock Claude tool call.
+
+    Shared by SIGNAL (3–5 min) and STORIES (6–45 min) — only the duration target
+    and scene count differ, passed in by the caller.
+    """
+
+    async def generate(
+        self,
+        topic: dict,
+        creator: dict,
+        research: List[dict],
+        *,
+        duration_min: int,
+        duration_max: int,
+        content_label: str = "video",
+    ) -> SceneScript:
+        research_text = "\n".join(
+            f"- {r.get('title') or 'Untitled'}: {r.get('summary') or ''} ({r.get('url')})"
+            for r in research[:5]
+        ) or "(no research available)"
+
+        # ~8s per scene → derive the expected scene count from the duration band.
+        min_scenes = max(1, duration_min // _SCENE_SECONDS)
+        max_scenes = max(min_scenes, duration_max // _SCENE_SECONDS)
+
+        system_prompt = (
+            f"{creator['style_prompt']}\n\n"
+            f"You are writing a {content_label} as a scene-by-scene breakdown for "
+            "automated video assembly. Each scene becomes one short (~8 second) "
+            "generated video clip plus its own narration line.\n\n"
+            "Rules:\n"
+            f"- Produce between {min_scenes} and {max_scenes} scenes, each about "
+            f"{_SCENE_SECONDS} seconds long.\n"
+            "- narration_text is spoken aloud by an English TTS voice — write it "
+            "ENTIRELY in English, in the persona's tone, one or two sentences.\n"
+            "- visual_description is an abstract beat (mood, subject, action) — it "
+            "is translated into a video prompt separately, so do NOT write camera "
+            "directions or text overlays.\n"
+            "- Number scenes sequentially from 1.\n"
+            "- Use scene_type to shape the arc: open with 'establishing', build "
+            "through 'development'/'transition', peak at 'climax', close with "
+            "'resolution'.\n"
+            "Call generate_video_script with the full breakdown."
+        )
+
+        user_prompt = (
+            f"Topic: {topic['name']}\n"
+            f"Research:\n{research_text}\n\n"
+            f"Generate a script with total_duration_seconds between "
+            f"{duration_min} and {duration_max}."
+        )
+
+        result, _ = await converse_tool(
+            user_prompt=user_prompt,
+            tool=SCRIPT_WITH_SCENES_TOOL,
+            system_prompt=system_prompt,
+            temperature=0.0,
+            max_tokens=8192,
+        )
+        if not result or not result.get("scenes"):
+            raise ValueError("Scene script generation returned no scenes")
+
+        scenes = result["scenes"]
+        # Defensive: ensure sequential scene_number and a positive duration so the
+        # assembler's ordering / fallback-card sizing always has valid inputs.
+        for i, scene in enumerate(scenes, start=1):
+            scene.setdefault("scene_number", i)
+            if not scene.get("duration_seconds"):
+                scene["duration_seconds"] = _SCENE_SECONDS
+
+        return SceneScript(
+            title=result.get("title") or topic["name"],
+            total_duration_seconds=int(
+                result.get("total_duration_seconds")
+                or sum(s["duration_seconds"] for s in scenes)
+            ),
+            scenes=scenes,
+        )
 
 
 def _strip_markdown_fences(text: str) -> str:

@@ -33,9 +33,12 @@ CREATE TABLE IF NOT EXISTS stories_films (
     status        VARCHAR(16) NOT NULL DEFAULT 'generating'
                       CHECK (status IN ('generating', 'ready', 'failed')),
     error_message TEXT,
+    generation_progress JSONB DEFAULT '{}',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Backfill for installs created before scene-stitching progress tracking.
+ALTER TABLE stories_films ADD COLUMN IF NOT EXISTS generation_progress JSONB DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_stories_films_user_id       ON stories_films (user_id);
 CREATE INDEX IF NOT EXISTS idx_stories_films_user_category ON stories_films (user_id, category);
 CREATE INDEX IF NOT EXISTS idx_stories_films_user_status   ON stories_films (user_id, status);
@@ -198,6 +201,52 @@ def update_film_status(
             ),
         )
         conn.commit()
+    finally:
+        cur.close()
+
+
+def update_film_progress(conn, film_id: str, patch: dict, *, user_id: str) -> None:
+    """Merge `patch` into a film's generation_progress JSONB. Called after every
+    clip (not batched) by the scene-stitching pipeline. # MUST SCOPE BY USER"""
+    import json
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """UPDATE stories_films
+               SET generation_progress = COALESCE(generation_progress, '{}'::jsonb) || %s::jsonb,
+                   updated_at = now()
+               WHERE id = %s AND user_id = %s""",
+            (json.dumps(patch), film_id, user_id),
+        )
+        conn.commit()
+    finally:
+        cur.close()
+
+
+def get_film_progress(conn, film_id: str, *, user_id: str) -> Optional[dict]:
+    """Return a film's generation progress with a derived percentage, or None if
+    the film does not exist. # MUST SCOPE BY USER
+
+    percent = clips_generated / total_scenes * 100  (0 when total unknown).
+    """
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            "SELECT status, generation_progress FROM stories_films WHERE id = %s AND user_id = %s",
+            (film_id, user_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        progress = row["generation_progress"] or {}
+        total = progress.get("total_scenes") or 0
+        done = progress.get("clips_generated") or 0
+        percent = round(done / total * 100) if total else (100 if row["status"] == "ready" else 0)
+        return {
+            "status": row["status"],
+            "percent": percent,
+            **progress,
+        }
     finally:
         cur.close()
 

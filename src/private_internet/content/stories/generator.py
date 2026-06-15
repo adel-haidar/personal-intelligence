@@ -24,12 +24,14 @@ Real series generation requires multi-episode scripting (a future sprint).
 import logging
 from typing import Optional
 
-from psycopg2.extras import RealDictCursor
-
 from private_internet.content.asset_store import AssetStore
-from private_internet.content.jobs.video_job import _select_topic, generate_video
+from private_internet.content.creator_selector import CreatorSelector
+from private_internet.content.jobs.video_job import _select_topic, _fetch_research
+from private_internet.content.video_assembler import assemble_video
+from private_internet.content.video_generator import SceneScriptGenerator
 from private_internet.content.stories.db import (
     insert_film,
+    update_film_progress,
     update_film_status,
 )
 from private_internet.database import _connect
@@ -39,6 +41,14 @@ logger = logging.getLogger(__name__)
 # 2:3 portrait aspect ratio for the film poster (768×1152)
 _POSTER_WIDTH = 768
 _POSTER_HEIGHT = 1152
+
+# Duration targets (seconds) passed to the scene script generator.
+STORIES_DURATION_TARGETS = {
+    "short_film":    (360,  900),   # 6–15 minutes
+    "feature":       (900,  2700),  # 15–45 minutes
+    "episode_short": (360,  600),   # 6–10 minutes
+    "episode_long":  (900,  1800),  # 15–30 minutes
+}
 
 
 async def _generate_poster(title: str, premise: Optional[str]) -> bytes:
@@ -74,91 +84,104 @@ async def generate_film(
     premise: Optional[str] = None,
     category: Optional[str] = None,
     topic_id: Optional[str] = None,
+    film_id: Optional[str] = None,
 ) -> str:
     """
-    Generate a STORIES film by reusing the SIGNAL pipeline.
+    Generate a STORIES film via the scene-stitching pipeline.
 
     Steps:
-    1. Insert a stories_films row (status='generating') as a reservation.
-    2. Call generate_video(topic_id, user_id=user_id) — this runs the full
-       SIGNAL pipeline (script → visuals → TTS → FFmpeg → S3) and returns a
-       content_videos.id.
-    3. Read the finished content_videos row to get video_url, thumbnail_url,
-       duration_seconds.
-    4. Generate a 2:3 portrait poster via fal FLUX (fallback: gradient).
-    5. Upload the poster to S3 under stories/{film_id}/poster.png.
+    1. Reserve a stories_films row (status='generating') — unless `film_id` is
+       supplied (the router pre-inserts one so the caller has an id to poll).
+    2. Resolve a topic + creator + research (real topic if topic_id, else a
+       synthetic topic from the title/premise).
+    3. Generate a scene-by-scene script (SceneScriptGenerator) targeting the
+       STORIES short_film duration band.
+    4. assemble_video(): translate → N Kling clips (parallel, semaphored, with
+       fallback cards) → ElevenLabs narration → FFmpeg stitch → S3. Progress is
+       written to generation_progress after every clip.
+    5. Generate a 2:3 portrait poster via fal FLUX (fallback: gradient).
     6. Update stories_films to status='ready' with all media URLs.
 
-    On any failure:
-    - The stories_films row is set to status='failed' with the error message.
-    - The exception is re-raised so the caller / background task can surface it.
-
+    On any failure the row is set to status='failed' and the exception re-raised.
     Returns the stories_films.id (UUID str).
     # MUST SCOPE BY USER
     """
     assert user_id is not None, "user_id must be set before any content operation"
 
     conn = _connect()
-    film_id: Optional[str] = None
+    # A dedicated connection for progress writes during the async clip fan-out,
+    # so they never collide with the main connection's cursors.
+    progress_conn = _connect()
 
     try:
-        # 1. Reserve the film row in generating state
-        film_id = insert_film(
-            conn,
-            user_id=user_id,
-            title=title,
-            premise=premise,
-            category=category,
-        )
+        # 1. Reserve the film row (unless the caller already did).
+        if film_id is None:
+            film_id = insert_film(
+                conn, user_id=user_id, title=title, premise=premise, category=category,
+            )
         logger.info("[user:%s] STORIES film %s — starting generation (title=%r)", user_id[:8], film_id, title)
 
-        # 2. Run SIGNAL pipeline — returns a content_videos.id
-        video_id = await generate_video(topic_id, user_id=user_id)
-        logger.info("[user:%s] STORIES film %s — SIGNAL video %s ready", user_id[:8], film_id, video_id)
+        # 2. Resolve topic + creator + research.
+        if topic_id:
+            topic = _select_topic(conn, topic_id, user_id=user_id)
+            research = _fetch_research(conn, topic["id"], user_id=user_id)
+        else:
+            # Synthetic topic from the requested title/premise (no DB row).
+            topic = {
+                "id": None,
+                "name": title,
+                "keywords": [k.strip() for k in (premise or "").split(",") if k.strip()],
+            }
+            research = []
+        creator = CreatorSelector().select_for_topic(conn, topic)
 
-        # 3. Read the completed content_videos row
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            "SELECT video_url, thumbnail_url, duration_seconds FROM content_videos WHERE id = %s AND user_id = %s",
-            (video_id, user_id),
+        # 3. Scene-by-scene script.
+        duration_min, duration_max = STORIES_DURATION_TARGETS["short_film"]
+        script = await SceneScriptGenerator().generate(
+            topic, creator, research,
+            duration_min=duration_min, duration_max=duration_max,
+            content_label="short film",
         )
-        video_row = cur.fetchone()
-        cur.close()
-        if not video_row:
-            raise RuntimeError(f"content_videos row not found for video_id={video_id}")
+        logger.info(
+            "[user:%s] STORIES film %s — script: %d scenes (~%ds)",
+            user_id[:8], film_id, len(script.scenes), script.total_duration_seconds,
+        )
 
-        video_url = video_row["video_url"]
-        thumbnail_url = video_row["thumbnail_url"]
-        duration_seconds = video_row["duration_seconds"]
+        # 4. Assemble — progress written after every clip.
+        def _on_progress(patch: dict) -> None:
+            update_film_progress(progress_conn, film_id, patch, user_id=user_id)
 
-        # 4. Generate a 2:3 poster
-        poster_bytes = await _generate_poster(title, premise)
+        video_key = f"stories/{film_id}/film.mp4"
+        await assemble_video(
+            scenes=script.scenes,
+            narration_text=script.narration_text,
+            language_code="en",
+            output_s3_key=video_key,
+            content_type="stories",
+            topic_name=topic["name"],
+            on_progress=_on_progress,
+        )
 
-        # 5. Upload poster
+        # 5. Poster + media URLs.
         asset_store = AssetStore()
-        poster_key = f"stories/{film_id}/poster.png"
-        # AssetStore._upload is the internal method used for all content types.
-        # We call it directly with the correct key and content-type.
-        poster_url = asset_store._upload(poster_key, poster_bytes, "image/png")
+        poster_bytes = await _generate_poster(title, premise)
+        poster_url = asset_store._upload(f"stories/{film_id}/poster.png", poster_bytes, "image/png")
+        video_url = f"{asset_store.cdn_base}/{video_key}"
 
-        # 6. Mark ready
+        # 6. Mark ready.
         update_film_status(
             conn,
             film_id,
             "ready",
             user_id=user_id,
-            signal_video_id=video_id,
             video_url=video_url,
-            thumbnail_url=thumbnail_url,
+            thumbnail_url=poster_url,
             poster_url=poster_url,
-            duration_seconds=duration_seconds,
+            duration_seconds=script.total_duration_seconds,
         )
         logger.info(
-            "[user:%s] STORIES film %s ready — duration=%.1fs video=%s",
-            user_id[:8],
-            film_id,
-            duration_seconds or 0.0,
-            video_url,
+            "[user:%s] STORIES film %s ready — duration=%ds video=%s",
+            user_id[:8], film_id, script.total_duration_seconds, video_url,
         )
         return film_id
 
@@ -167,11 +190,7 @@ async def generate_film(
         if film_id:
             try:
                 update_film_status(
-                    conn,
-                    film_id,
-                    "failed",
-                    user_id=user_id,
-                    error_message=str(exc)[:512],
+                    conn, film_id, "failed", user_id=user_id, error_message=str(exc)[:512],
                 )
             except Exception:
                 logger.error("Could not mark film %s as failed", film_id, exc_info=True)
@@ -179,6 +198,7 @@ async def generate_film(
 
     finally:
         conn.close()
+        progress_conn.close()
 
 
 # ── Batch entry point (cron / run_for_all_users) ─────────────────────────────

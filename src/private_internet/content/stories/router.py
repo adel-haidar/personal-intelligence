@@ -149,6 +149,24 @@ async def get_film(film_id: UUID, ctx: RequestContext = Depends(get_request_cont
         conn.close()
 
 
+@router.get("/films/{film_id}/progress")
+async def get_film_progress(film_id: UUID, ctx: RequestContext = Depends(get_request_context)):
+    """Generation progress for a film being assembled by the scene-stitching
+    pipeline. Frontend polls this to render a progress bar.
+
+    Returns: {status, percent, total_scenes, clips_generated, current_stage, …}.
+    `percent` = clips_generated / total_scenes * 100.
+    """
+    conn = _connect()
+    try:
+        progress = stories_db.get_film_progress(conn, str(film_id), user_id=ctx.user_id)
+        if progress is None:
+            raise HTTPException(status_code=404, detail="Film not found")
+        return progress
+    finally:
+        conn.close()
+
+
 @router.post("/films/generate", status_code=202)
 async def generate_film_endpoint(
     body: GenerateFilmIn,
@@ -172,53 +190,21 @@ async def generate_film_endpoint(
         conn.close()
 
     async def _run():
-        from private_internet.content.stories.db import update_film_status
-        from private_internet.database import _connect as connect2
+        # generate_film owns the full scene-stitching pipeline and the
+        # ready/failed status transitions. We pass the pre-inserted film_id so it
+        # reuses our reservation row instead of inserting a second one.
         try:
-            # We already inserted the row above; call the internals directly
-            # (generate_film would insert a second row, so we use the lower-level
-            # approach: run generate_video, then update the existing row).
-            from private_internet.content.jobs.video_job import generate_video
-            from private_internet.content.asset_store import AssetStore
-            from private_internet.content.stories.generator import _generate_poster
-            from psycopg2.extras import RealDictCursor
-
-            video_id = await generate_video(body.topic_id, user_id=ctx.user_id)
-
-            conn2 = connect2()
-            try:
-                cur = conn2.cursor(cursor_factory=RealDictCursor)
-                cur.execute(
-                    "SELECT video_url, thumbnail_url, duration_seconds FROM content_videos WHERE id = %s AND user_id = %s",
-                    (video_id, ctx.user_id),
-                )
-                vr = cur.fetchone()
-                cur.close()
-
-                poster_bytes = await _generate_poster(body.title, body.premise)
-                asset_store = AssetStore()
-                poster_url = asset_store._upload(f"stories/{film_id}/poster.png", poster_bytes, "image/png")
-
-                update_film_status(
-                    conn2,
-                    film_id,
-                    "ready",
-                    user_id=ctx.user_id,
-                    signal_video_id=video_id,
-                    video_url=vr["video_url"] if vr else None,
-                    thumbnail_url=vr["thumbnail_url"] if vr else None,
-                    poster_url=poster_url,
-                    duration_seconds=vr["duration_seconds"] if vr else None,
-                )
-            finally:
-                conn2.close()
+            await generate_film(
+                user_id=ctx.user_id,
+                title=body.title,
+                premise=body.premise,
+                category=body.category,
+                topic_id=body.topic_id,
+                film_id=film_id,
+            )
         except Exception as exc:
+            # generate_film already marked the row failed; just log here.
             logger.error("[user:%s] Background film generation failed: %s", ctx.user_id[:8], exc, exc_info=True)
-            conn3 = _connect()
-            try:
-                update_film_status(conn3, film_id, "failed", user_id=ctx.user_id, error_message=str(exc)[:512])
-            finally:
-                conn3.close()
 
     background_tasks.add_task(_run)
     return {"film_id": film_id, "status": "generating"}

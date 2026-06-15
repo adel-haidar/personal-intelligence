@@ -100,6 +100,10 @@ def init_content_db() -> None:
     # generator chose, for later per-mood/topic performance analysis.
     cur.execute("ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS post_format VARCHAR(50)")
 
+    # SIGNAL scene-stitching: per-clip generation progress for the long-form
+    # video pipeline (total_scenes, clips_generated, current_stage, …).
+    cur.execute("ALTER TABLE content_videos ADD COLUMN IF NOT EXISTS generation_progress JSONB DEFAULT '{}'")
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_posts_creator ON content_posts(creator_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_posts_topic ON content_posts(topic_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON content_posts(created_at DESC)")

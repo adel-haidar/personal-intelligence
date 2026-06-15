@@ -12,11 +12,17 @@ from psycopg2.extras import RealDictCursor
 from private_internet.config import get_settings
 from private_internet.database import _connect
 from private_internet.content.creator_selector import CreatorSelector
-from private_internet.content.video_generator import VideoScriptGenerator, VideoImageGenerator
+from private_internet.content.video_generator import (
+    VideoScriptGenerator,
+    VideoImageGenerator,
+    SceneScriptGenerator,
+    SIGNAL_DURATION_TARGETS,
+)
 from private_internet.content.elevenlabs_engine import ElevenLabsEngine, get_tts_engine
 from private_internet.content.fal_video import generate_video_clip
 from private_internet.content.voice_config import get_voice_id
 from private_internet.content.ffmpeg_assembler import VideoAssembler
+from private_internet.content.video_assembler import assemble_video
 from private_internet.content.asset_store import AssetStore
 from private_internet.content.visual_translator import (
     build_final_prompt,
@@ -305,6 +311,123 @@ async def generate_video(topic_id: str | None = None, *, user_id: str) -> str:
         # 15. Cleanup even on failure
         shutil.rmtree(work_dir, ignore_errors=True)
         conn.close()
+
+
+def _update_video_progress(conn, video_id: str, patch: dict, *, user_id: str) -> None:
+    """Merge `patch` into a video's generation_progress JSONB. # MUST SCOPE BY USER"""
+    import json
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """UPDATE content_videos
+               SET generation_progress = COALESCE(generation_progress, '{}'::jsonb) || %s::jsonb
+               WHERE id = %s AND user_id = %s""",
+            (json.dumps(patch), video_id, user_id),
+        )
+        conn.commit()
+    finally:
+        cur.close()
+
+
+async def generate_long_video(topic_id: str | None = None, *, user_id: str) -> str:
+    """
+    Long-form SIGNAL pipeline (3–5 min) via scene-stitching: scene-by-scene
+    script → N Kling clips (parallel, semaphored, fallback cards) → ElevenLabs
+    narration → FFmpeg stitch → S3. Returns the video_id.
+    # MUST SCOPE BY USER
+
+    Unlike generate_video() (the 5-section slide pipeline), this assembles many
+    short clips into one long video via content/video_assembler.assemble_video.
+    Per-clip progress is written to content_videos.generation_progress.
+
+    On failure the row is set to status='failed' and the exception re-raised.
+    """
+    assert user_id is not None, "user_id must be set before any content operation"
+
+    conn = _connect()
+    progress_conn = _connect()  # dedicated conn for progress writes during fan-out
+    video_id = str(uuid.uuid4())
+
+    try:
+        topic = _select_topic(conn, topic_id, user_id=user_id)
+        creator = CreatorSelector().select_for_topic(conn, topic)
+        research = _fetch_research(conn, topic["id"], user_id=user_id)
+        logger.info(
+            f"Generating long video {video_id} — topic='{topic['name']}', creator='{creator['slug']}'"
+        )
+
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO content_videos
+               (id, creator_id, topic_id, title, script, status, user_id)
+               VALUES (%s, %s, %s, %s, %s, 'processing', %s)""",
+            (video_id, creator["id"], topic["id"], topic["name"], "", user_id),
+        )
+        conn.commit()
+        cur.close()
+
+        # Scene-by-scene script targeting the SIGNAL standard duration band.
+        duration_min, duration_max = SIGNAL_DURATION_TARGETS["standard"]
+        script = await SceneScriptGenerator().generate(
+            topic, creator, research,
+            duration_min=duration_min, duration_max=duration_max,
+            content_label="short video",
+        )
+
+        def _on_progress(patch: dict) -> None:
+            _update_video_progress(progress_conn, video_id, patch, user_id=user_id)
+
+        video_key = f"content/videos/{video_id}/video.mp4"
+        await assemble_video(
+            scenes=script.scenes,
+            narration_text=script.narration_text,
+            language_code="en",
+            output_s3_key=video_key,
+            content_type="signal",
+            topic_name=topic["name"],
+            on_progress=_on_progress,
+        )
+        video_url = f"{AssetStore().cdn_base}/{video_key}"
+
+        cur = conn.cursor()
+        cur.execute(
+            """UPDATE content_videos
+               SET status = 'ready', title = %s, video_url = %s, duration_seconds = %s
+               WHERE id = %s AND user_id = %s""",
+            (script.title, video_url, script.total_duration_seconds, video_id, user_id),
+        )
+        cur.execute(
+            """UPDATE content_topics
+               SET used_count = used_count + 1, last_used_at = %s
+               WHERE id = %s AND user_id = %s""",
+            (datetime.now(timezone.utc), topic["id"], user_id),
+        )
+        conn.commit()
+        cur.close()
+
+        logger.info(
+            f"Long video {video_id} ready — '{script.title}', "
+            f"{len(script.scenes)} scenes, {script.total_duration_seconds}s, {video_url}"
+        )
+        return video_id
+
+    except Exception as e:
+        logger.error(f"Long video generation failed for {video_id}: {e}", exc_info=True)
+        try:
+            conn.rollback()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE content_videos SET status = 'failed' WHERE id = %s", (video_id,)
+            )
+            conn.commit()
+            cur.close()
+        except Exception:
+            logger.error(f"Could not mark video {video_id} as failed", exc_info=True)
+        raise
+
+    finally:
+        conn.close()
+        progress_conn.close()
 
 
 async def generate_videos_batch(count: int = 2, topic_id: str | None = None, *, user_id: str) -> dict:
