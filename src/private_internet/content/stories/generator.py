@@ -27,7 +27,7 @@ from typing import Optional
 from psycopg2.extras import RealDictCursor
 
 from private_internet.content.asset_store import AssetStore
-from private_internet.content.jobs.video_job import generate_video
+from private_internet.content.jobs.video_job import _select_topic, generate_video
 from private_internet.content.stories.db import (
     insert_film,
     update_film_status,
@@ -179,6 +179,57 @@ async def generate_film(
 
     finally:
         conn.close()
+
+
+# ── Batch entry point (cron / run_for_all_users) ─────────────────────────────
+
+async def generate_films_batch(count: int = 1, *, user_id: str) -> dict:
+    """Generate `count` STORIES films for a single user, auto-selecting topics.
+
+    Cron / ``run_for_all_users``-friendly: takes a required ``user_id`` and
+    asserts it. Each film reuses the SIGNAL video pipeline via ``generate_film``;
+    the title/premise are derived from the user's highest-weight unused topic
+    (the same selector the SIGNAL video job uses), so no client input is needed.
+
+    # MUST SCOPE BY USER
+    """
+    assert user_id is not None, "user_id must be set before any content operation"
+
+    generated: list[str] = []
+    failed: list[str] = []
+
+    for _ in range(max(1, count)):
+        # Pick a topic up-front so the film title matches the SIGNAL video's topic.
+        conn = _connect()
+        try:
+            topic = _select_topic(conn, None, user_id=user_id)
+        except Exception as exc:
+            logger.warning(
+                "[user:%s] STORIES batch — no topic available, stopping: %s",
+                user_id[:8], exc,
+            )
+            break
+        finally:
+            conn.close()
+
+        keywords = topic.get("keywords") or []
+        premise = ", ".join(keywords) if keywords else None
+        try:
+            film_id = await generate_film(
+                user_id=user_id,
+                title=topic["name"],
+                premise=premise,
+                topic_id=str(topic["id"]),
+            )
+            generated.append(film_id)
+        except Exception as exc:
+            logger.error(
+                "[user:%s] STORIES batch film failed: %s",
+                user_id[:8], exc, exc_info=True,
+            )
+            failed.append(str(exc)[:200])
+
+    return {"generated": generated, "failed": failed, "count": len(generated)}
 
 
 # ── Series / episode generation (STUB) ───────────────────────────────────────

@@ -1,0 +1,12 @@
+[Unit]
+Description=Generate STORIES films for all users
+After=network.target personal-intelligence-api.service
+Wants=personal-intelligence-api.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/home/ec2-user/personal-intelligence/.env
+# Generate 1 STORIES film per onboarded user. Async (HTTP 202), fanned over all
+# users; same-host auth via INTERNAL_SECRET. Films reuse the SIGNAL video
+# pipeline (FFmpeg), so this is the most expensive job — runs once daily.
+ExecStart=/bin/sh -c 'curl -sS -o /dev/null -w "stories=%%{http_code} " -X POST -H "X-Internal-Secret: $INTERNAL_SECRET" "http://127.0.0.1:8000/api/stories/jobs/run?count=1"; echo'

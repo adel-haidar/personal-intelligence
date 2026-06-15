@@ -42,6 +42,8 @@ from private_internet.content.aria.models import (
     TrackOut,
 )
 from private_internet.content.asset_store import AssetStore
+from private_internet.content.router import _require_internal_secret
+from private_internet.core.jobs import run_for_all_users
 from private_internet.core.request_context import RequestContext, get_request_context
 
 router = APIRouter(prefix="/api/aria")
@@ -253,3 +255,16 @@ async def trigger_generation(
     """Trigger music generation for the authenticated user (1–5 tracks)."""
     background_tasks.add_task(generate_tracks_batch, count, user_id=ctx.user_id)
     return {"status": "enqueued", "count": count}
+
+
+@router.post("/jobs/run", status_code=202)
+async def run_music_generation_job_endpoint(
+    background_tasks: BackgroundTasks,
+    count: int = Query(default=2, ge=1, le=5),
+    _: None = Depends(_require_internal_secret),
+):
+    """Internal-secret cron endpoint (systemd timer / EventBridge): generate
+    `count` ARIA tracks for ALL onboarded users."""
+    background_tasks.add_task(run_for_all_users, generate_tracks_batch, count=count)
+    return {"status": "enqueued", "job": "music_generation", "count": count,
+            "scope": "all_users"}

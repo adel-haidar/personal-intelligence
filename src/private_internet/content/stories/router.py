@@ -31,6 +31,8 @@ from private_internet.content.stories.models import (
     WatchProgressIn,
     WatchProgressOut,
 )
+from private_internet.content.router import _require_internal_secret
+from private_internet.core.jobs import run_for_all_users
 from private_internet.core.request_context import RequestContext, get_request_context
 from private_internet.database import _connect
 
@@ -220,6 +222,24 @@ async def generate_film_endpoint(
 
     background_tasks.add_task(_run)
     return {"film_id": film_id, "status": "generating"}
+
+
+@router.post("/jobs/run", status_code=202)
+async def run_film_generation_job_endpoint(
+    background_tasks: BackgroundTasks,
+    count: int = 1,
+    _: None = Depends(_require_internal_secret),
+):
+    """Internal-secret cron endpoint (systemd timer / EventBridge): generate
+    `count` STORIES films for ALL onboarded users. Titles/premises are
+    auto-derived from each user's topics — no client input required."""
+    if not (1 <= count <= 3):
+        raise HTTPException(status_code=422, detail="count must be between 1 and 3")
+    from private_internet.content.stories.generator import generate_films_batch
+
+    background_tasks.add_task(run_for_all_users, generate_films_batch, count=count)
+    return {"status": "enqueued", "job": "film_generation", "count": count,
+            "scope": "all_users"}
 
 
 # ── Series ────────────────────────────────────────────────────────────────────
