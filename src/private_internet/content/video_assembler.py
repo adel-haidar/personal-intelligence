@@ -10,6 +10,25 @@ module stitches many short clips into one long video:
                       → FFmpeg concat + mux → upload to S3
 
 Used by both SIGNAL and STORIES — the scene-stitching logic lives here once.
+
+Per-clip provider routing + fallback hierarchy
+----------------------------------------------
+Which provider generates a clip is decided ONLY by content/video_provider.py
+(get_provider). The per-provider fallback hierarchy is:
+
+    SIGNAL / PULSE:
+      Primary:  Wan2.1 (Replicate)
+      Fallback: Colour card (FFmpeg)
+      Never:    Kling — too expensive for high-volume content. A failed
+                SIGNAL/PULSE clip must NEVER trigger a Kling API call.
+
+    STORIES:
+      Primary:  Kling (fal.ai)
+      Fallback: Wan2.1 (Replicate)
+      Last:     Colour card (FFmpeg)
+
+"Kling" here is the existing fal.ai client (content/fal_video.generate_video_clip,
+configured with a Kling model). It is not modified by the routing.
 """
 
 import asyncio
@@ -24,6 +43,11 @@ from typing import Awaitable, Callable, List, Optional, Union
 from private_internet.content.asset_store import AssetStore
 from private_internet.content.elevenlabs_engine import ElevenLabsEngine, get_tts_engine
 from private_internet.content.fal_video import generate_video_clip
+from private_internet.content.replicate_wan_client import (
+    ReplicateWanClient,
+    Wan2GenerationError,
+)
+from private_internet.content.video_provider import get_provider, log_generation_cost
 from private_internet.content.visual_translator import (
     build_final_prompt,
     kling_duration,
@@ -34,6 +58,11 @@ from private_internet.content.voice_config import get_voice_id
 logger = logging.getLogger(__name__)
 
 MAX_CONCURRENT_KLING_CALLS = 4  # semaphore limit — never exceed (Kling rate limits)
+
+# Wan2.1 (Replicate) client — module singleton, lazy under the hood (it builds no
+# replicate.Client and reads no key until a clip is actually requested), so
+# importing this module never needs the package or REPLICATE_API_KEY.
+_wan_client = ReplicateWanClient()
 
 # Mood → fallback solid-colour card (used when a clip fails to generate). The
 # keys match the visual translator's mood enum. Dark, Calm-Intelligence tints so
@@ -195,6 +224,57 @@ def _build_clip_plan(script_scenes: List[dict], translated: List[dict]) -> List[
     return plan
 
 
+async def _generate_clip_with_fallback(
+    provider: str,
+    prompt: str,
+    duration: int,
+    aspect_ratio: str = "16:9",
+) -> tuple[Optional[bytes], Optional[str], bool]:
+    """Generate one clip via the routed provider, applying the per-provider
+    fallback hierarchy (see the module docstring). Returns
+    ``(mp4_bytes, used_provider, is_fallback)``:
+
+    - ``mp4_bytes`` is None when every model in the hierarchy failed and the
+      caller must render a colour card (``used_provider`` is then None too).
+    - ``used_provider`` is the provider that actually produced the bytes, so the
+      cost log reflects reality — e.g. a Kling failure served by Wan2.1 logs
+      ``"wan2"``, not ``"kling"``.
+    - ``is_fallback`` is True when the clip did NOT come from the content type's
+      primary provider (a secondary model OR, via the caller, a colour card).
+
+    Hierarchy:
+      ``wan2``  (SIGNAL/PULSE): Wan2.1 → colour card. NEVER Kling (cost model).
+      ``kling`` (STORIES):      Kling  → Wan2.1 → colour card.
+    """
+    if provider == "wan2":
+        try:
+            data = await _wan_client.generate_clip(prompt=prompt, duration_seconds=duration)
+            return data, "wan2", False
+        except Wan2GenerationError as exc:
+            # A failed SIGNAL/PULSE clip NEVER triggers a Kling call — the caller
+            # renders a colour card instead. This protects the cost model.
+            logger.warning("Wan2.1 failed (%s); using colour card.", exc)
+            return None, None, True
+
+    if provider == "kling":
+        try:
+            data = await generate_video_clip(prompt, duration=duration, aspect_ratio=aspect_ratio)
+            return data, "kling", False
+        except Exception as exc:
+            # STORIES quality matters — try Wan2.1 before the colour card.
+            logger.warning("Kling failed (%s); falling back to Wan2.1.", exc)
+            try:
+                data = await _wan_client.generate_clip(prompt=prompt, duration_seconds=duration)
+                return data, "wan2", True
+            except Wan2GenerationError as exc2:
+                logger.error(
+                    "Wan2.1 fallback also failed (%s); using colour card.", exc2
+                )
+                return None, None, True
+
+    raise ValueError(f"Unknown provider: {provider}")
+
+
 async def assemble_video(
     scenes: List[dict],          # from the script tool output
     narration_text: str,         # full narration for ElevenLabs
@@ -243,7 +323,10 @@ async def assemble_video(
             "current_stage": "generating_clips",
         })
 
-        # Step 2 — generate clips in parallel, capped by the semaphore.
+        # Step 2 — generate clips in parallel, capped by the semaphore. The
+        # provider is decided once per assembly (content_type is fixed) by the
+        # single source of truth in video_provider.py.
+        provider = get_provider(content_type)
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_KLING_CALLS)
         done_lock = asyncio.Lock()
         clips_done = 0
@@ -253,18 +336,23 @@ async def assemble_video(
             scene_number = entry["scene_number"]
             clip_path = work_dir / f"clip_{scene_number:04d}.mp4"
             async with semaphore:
+                mp4: Optional[bytes] = None
+                used_provider: Optional[str] = None
+                is_fallback = True
                 try:
-                    data = await generate_video_clip(
-                        entry["kling_prompt"],
-                        duration=entry["clip_duration"],
-                        aspect_ratio="16:9",
+                    mp4, used_provider, is_fallback = await _generate_clip_with_fallback(
+                        provider, entry["kling_prompt"], entry["clip_duration"],
                     )
-                    clip_path.write_bytes(data)
                 except Exception as exc:
-                    # Never abort the assembly for one failed clip.
+                    # Never abort the assembly for one failed clip — any
+                    # unexpected error degrades to a colour card.
                     logger.warning(
                         "clip generation failed (scene %s): %s", scene_number, exc
                     )
+                if mp4 is not None:
+                    clip_path.write_bytes(mp4)
+                    log_generation_cost(used_provider, content_type, scene_number, is_fallback)
+                else:
                     generate_fallback_card(entry["mood"], entry["card_duration"], str(clip_path))
             # Update progress after EVERY clip (not batched).
             async with done_lock:

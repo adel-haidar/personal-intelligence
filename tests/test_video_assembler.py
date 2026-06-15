@@ -108,8 +108,16 @@ class TestTranslateAndChunk:
 
 def _patch_pipeline(clip_side_effect):
     """Patch every external dependency of assemble_video. `clip_side_effect`
-    drives the per-clip Kling call. Returns a dict of the mocks for assertions."""
+    drives the per-clip provider call — both the Kling (fal) and Wan2.1 clients
+    are wired to it, so a test works whatever the content_type routes to.
+    Returns a dict of the mocks for assertions."""
     recorded = {"fallback_cards": 0, "concat_written": False, "uploaded_key": None}
+
+    async def wan_side_effect(prompt, duration_seconds=5, width=1280, height=720):
+        # Adapt the Wan2.1 client signature to the shared clip side effect.
+        return await clip_side_effect(
+            prompt, duration=duration_seconds, aspect_ratio="16:9"
+        )
 
     def fake_run_ffmpeg(args):
         # Track fallback-card invocations by their lavfi color source.
@@ -135,6 +143,7 @@ def _patch_pipeline(clip_side_effect):
         patch.object(va, "write_concat_manifest", side_effect=fake_write_manifest),
         patch.object(va, "translate_scenes", new=AsyncMock(return_value=[])),
         patch.object(va, "generate_video_clip", new=AsyncMock(side_effect=clip_side_effect)),
+        patch.object(va._wan_client, "generate_clip", new=AsyncMock(side_effect=wan_side_effect)),
         patch.object(va, "_synthesize_narration", lambda *a, **k: None),
         patch.object(va, "AssetStore", FakeStore),
     ]

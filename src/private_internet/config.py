@@ -79,6 +79,16 @@ class Settings(BaseSettings):
     # (e.g. Veo3). Comma-separated so it is overridable per-instance via env.
     fal_video_durations: str = "5,10"
 
+    # ── SIGNAL/PULSE video (Wan2.1 via Replicate) ───────────────
+    # Video clips are routed by content type in content/video_provider.py:
+    # SIGNAL + PULSE use Wan2.1 on Replicate (high volume, cost-efficient);
+    # STORIES stays on Kling (fal, above). Key comes from the environment only.
+    # A failed SIGNAL/PULSE clip degrades to a colour card — never to Kling.
+    replicate_api_key: str = ""
+    # Verified Replicate model slug. wan-video/wan-2.1-1.3b → ~5s 480p clips.
+    # Override per instance for a higher-res / duration-configurable Wan variant.
+    wan2_model: str = "wan-video/wan-2.1-1.3b"
+
     upload_dir: str = "/uploads"
 
     # ── ARIA music (ElevenLabs music generation) ────────────────

@@ -18,6 +18,7 @@ dependencies = [
     "pillow>=10.0.0",
     "lingua-language-detector>=2.0.0",
     "pydub>=0.25",
+    "replicate>=1.0.0",
 ]
 
 [project.optional-dependencies]

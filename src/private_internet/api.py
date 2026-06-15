@@ -49,6 +49,11 @@ def _warn_missing_env() -> None:
         logger.warning(
             "SEED_ADMIN_EMAIL is unset — seed admin defaults to admin@%s.", s.app_domain
         )
+    if not s.replicate_api_key:
+        logger.warning(
+            "REPLICATE_API_KEY is not set. SIGNAL and PULSE video generation "
+            "will fall back to colour cards (STORIES still uses Kling/fal)."
+        )
 
 
 def _bootstrap_step(name: str, fn) -> None:
