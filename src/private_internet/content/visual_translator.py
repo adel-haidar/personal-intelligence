@@ -136,11 +136,13 @@ async def translate_scenes(
     return scenes
 
 
-def kling_duration(scene: dict) -> str:
-    """Map a translated duration_seconds to a Kling-supported clip length.
+def kling_duration(scene: dict) -> int:
+    """The clip length (seconds) to request for a scene.
 
-    Kling on fal accepts "5" or "10"; the translator may emit 8. We clamp to the
-    nearest supported value so the Kling API call itself is never changed.
+    Returns the scene's requested ``duration_seconds`` verbatim (default 5). The
+    fal call (``generate_video_clip``) snaps this to whatever the configured
+    video model actually supports, so duration policy lives in one place — here
+    we only express the intent.
     """
     requested: Optional[int] = scene.get("duration_seconds")
-    return "10" if isinstance(requested, int) and requested >= 8 else "5"
+    return requested if isinstance(requested, int) and requested > 0 else 5

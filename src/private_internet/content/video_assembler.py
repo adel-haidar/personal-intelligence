@@ -178,11 +178,12 @@ def _build_clip_plan(script_scenes: List[dict], translated: List[dict]) -> List[
         card_duration = int(scene.get("duration_seconds") or _FALLBACK_DURATION_DEFAULT)
         if t:
             prompt = build_final_prompt(t)
-            clip_duration = kling_duration(t)          # "5" | "10"
+            # Requested seconds; generate_video_clip snaps to the model's menu.
+            clip_duration = kling_duration(t)
             mood = t.get("mood") or _scene_mood(scene)
         else:
             prompt = fallback_prompts[i]
-            clip_duration = "10" if card_duration >= 8 else "5"
+            clip_duration = card_duration
             mood = _scene_mood(scene)
         plan.append({
             "scene_number": scene.get("scene_number", i + 1),

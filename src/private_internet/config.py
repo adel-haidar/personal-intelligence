@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     # to a slide per section, so the video always assembles.
     video_backend: str = "fal"                     # "fal" | "slides"
     fal_video_model: str = "fal-ai/kling-video/v1/standard/text-to-video"
+    # Clip durations (seconds) the configured fal_video_model accepts. The fal
+    # call snaps each requested per-scene duration to the nearest value here.
+    # Kling v1 standard = "5,10"; set "5,8,10" for models that also support 8s
+    # (e.g. Veo3). Comma-separated so it is overridable per-instance via env.
+    fal_video_durations: str = "5,10"
 
     upload_dir: str = "/uploads"
 

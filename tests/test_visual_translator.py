@@ -87,8 +87,10 @@ class TestBuildFinalPrompt:
 
 
 class TestKlingDuration:
-    @pytest.mark.parametrize("seconds,expected", [(5, "5"), (8, "10"), (10, "10"), (None, "5")])
-    def test_clamps_to_supported_kling_values(self, seconds, expected):
+    @pytest.mark.parametrize("seconds,expected", [(5, 5), (8, 8), (10, 10), (None, 5), (0, 5)])
+    def test_returns_requested_seconds_for_fal_to_snap(self, seconds, expected):
+        # kling_duration only expresses intent; the fal call snaps to the model's
+        # supported menu, so it must pass the requested value through unchanged.
         assert kling_duration({"duration_seconds": seconds}) == expected
 
 
