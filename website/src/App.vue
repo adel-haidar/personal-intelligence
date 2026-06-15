@@ -42,7 +42,7 @@ function handleStart() {
 }
 
 function handleSignin() {
-  window.open('https://app.private-internet.ai/login', '_blank')
+  window.open('https://app.private-internet.io/login', '_blank')
 }
 </script>
 

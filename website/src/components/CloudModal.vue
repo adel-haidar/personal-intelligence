@@ -17,7 +17,7 @@ function submit(e: Event) {
   e.preventDefault()
   loading.value = true
   setTimeout(() => {
-    window.open('https://app.private-internet.ai/register?plan=cloud', '_blank')
+    window.open('https://app.private-internet.io/register?plan=cloud', '_blank')
     loading.value = false
     emit('close')
   }, 900)
@@ -77,7 +77,7 @@ const m = props.t.modal.cloud
         <PiButton variant="cta" :block="true" type="submit" :loading="loading" icon="arrowRight">{{ m.cta }}</PiButton>
       </form>
       <div class="mk-modal__foot">
-        <a href="https://app.private-internet.ai/login" target="_blank" rel="noopener">{{ m.signin }} →</a>
+        <a href="https://app.private-internet.io/login" target="_blank" rel="noopener">{{ m.signin }} →</a>
       </div>
     </div>
   </div>

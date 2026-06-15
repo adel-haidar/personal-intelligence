@@ -25,7 +25,7 @@ export default {
     p3: 'Plus vous partagez avec lui, plus il devient intelligent. Mais il ne partage jamais qu\'avec vous.',
     memories: '142 souvenirs', updated: 'Mis à jour il y a 2 heures',
     health: 'Santé du Cerveau', growing: 'En croissance', powers: 'Votre Cerveau alimente',
-    caption: 'Depuis la vraie plateforme — app.private-internet.ai',
+    caption: 'Depuis la vraie plateforme — app.private-internet.io',
     stat1: '142 souvenirs', stat2: '6 modules', stat3: '100% privé',
   },
   modules: {

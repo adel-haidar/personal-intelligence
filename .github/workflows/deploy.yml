@@ -25,7 +25,9 @@ jobs:
     if: |
       contains(github.event.head_commit.message, '[deploy-all]') ||
       (!startsWith(github.event.head_commit.message, 'feat(dashboard)') &&
-       !startsWith(github.event.head_commit.message, 'fix(dashboard)'))
+       !startsWith(github.event.head_commit.message, 'fix(dashboard)') &&
+       !startsWith(github.event.head_commit.message, 'feat(website)') &&
+       !startsWith(github.event.head_commit.message, 'fix(website)'))
 
     steps:
       - name: Configure AWS credentials via OIDC
@@ -130,7 +132,9 @@ jobs:
     if: |
       contains(github.event.head_commit.message, '[deploy-all]') ||
       (!startsWith(github.event.head_commit.message, 'feat(backend)') &&
-       !startsWith(github.event.head_commit.message, 'fix(backend)'))
+       !startsWith(github.event.head_commit.message, 'fix(backend)') &&
+       !startsWith(github.event.head_commit.message, 'feat(website)') &&
+       !startsWith(github.event.head_commit.message, 'fix(website)'))
 
     defaults:
       run:
@@ -177,4 +181,63 @@ jobs:
         run: |
           aws cloudfront create-invalidation \
             --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+  # ─────────────────────────────────────────────
+  # JOB 3 — Marketing website → S3 + CloudFront
+  #   Lives at private-internet.io (the platform is app.private-internet.io).
+  #   Opt-in: runs only on feat(website)/fix(website) commits or [deploy-all],
+  #   so generic/backend/dashboard commits never touch it. Requires the
+  #   S3_WEBSITE_BUCKET and WEBSITE_CLOUDFRONT_DISTRIBUTION_ID repo secrets.
+  # ─────────────────────────────────────────────
+  deploy-website:
+    name: Deploy Marketing Website to S3 + CloudFront
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.head_commit.message, '[deploy-all]') ||
+      startsWith(github.event.head_commit.message, 'feat(website)') ||
+      startsWith(github.event.head_commit.message, 'fix(website)')
+
+    defaults:
+      run:
+        working-directory: website
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build site
+        run: npm run build
+
+      # ↓ OIDC — no stored AWS keys needed
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-central-1
+
+      - name: Sync dist/ to S3
+        run: |
+          aws s3 sync dist/ s3://${{ secrets.S3_WEBSITE_BUCKET }} \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "index.html"
+
+          aws s3 cp dist/index.html s3://${{ secrets.S3_WEBSITE_BUCKET }}/index.html \
+            --cache-control "no-cache, no-store, must-revalidate"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.WEBSITE_CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"

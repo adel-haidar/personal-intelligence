@@ -25,7 +25,7 @@ export default {
     p3: 'The more you share with it, the smarter it gets. But it only ever shares with you.',
     memories: '142 memories', updated: 'Last updated 2 hours ago',
     health: 'Brain health', growing: 'Growing', powers: 'Your Brain powers',
-    caption: 'From the actual platform — app.private-internet.ai',
+    caption: 'From the actual platform — app.private-internet.io',
     stat1: '142 memories', stat2: '6 modules', stat3: '100% private',
   },
   modules: {

@@ -497,6 +497,47 @@ sudo systemctl restart personal-intelligence-api
 
 ---
 
+## Marketing website — `private-internet.io`
+
+The long-scroll marketing site in `website/` (Vue 3 + Vite) is a **separate
+deployable** from the dashboard. It is served at the apex `private-internet.io`;
+the platform/dashboard it links to lives at `app.private-internet.io`.
+
+CI/CD: the `deploy-website` job in `.github/workflows/deploy.yml` mirrors the
+dashboard job (npm build → S3 sync → CloudFront invalidation). It is **opt-in** —
+it runs only when the commit message starts with `feat(website)` / `fix(website)`
+or contains `[deploy-all]`, so backend/dashboard/generic commits never touch it.
+
+**One-time AWS setup** (same recipe as the dashboard — Steps 1, 2, 3, 6, 8 above,
+but for the new domain): ACM cert for `private-internet.io` in **us-east-1**, a
+new S3 bucket, a new CloudFront distribution (with the SPA 404→`/index.html`
+behavior from Step 6), and Route 53 records for `private-internet.io`.
+
+**Repo secrets the job needs** (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `S3_WEBSITE_BUCKET` | the new website bucket name |
+| `WEBSITE_CLOUDFRONT_DISTRIBUTION_ID` | the new distribution's ID |
+
+(`AWS_ROLE_ARN` is reused from the existing OIDC setup — no new role needed,
+though the role's policy must allow `s3:*` on the new bucket and
+`cloudfront:CreateInvalidation` on the new distribution.)
+
+**Manual deploy** (fallback, from your local machine):
+
+```bash
+cd /home/adel/dev/personal-intelligence/website
+npm run build
+aws s3 sync dist/ s3://<WEBSITE_BUCKET>/ --delete \
+  --exclude "index.html" --cache-control "max-age=31536000,immutable" --region eu-central-1
+aws s3 cp dist/index.html s3://<WEBSITE_BUCKET>/index.html \
+  --cache-control "no-cache, no-store, must-revalidate" --region eu-central-1
+aws cloudfront create-invalidation --distribution-id <WEBSITE_DISTRIBUTION_ID> --paths "/*"
+```
+
+---
+
 ## Troubleshooting
 
 **Refreshing on a Vue route gives a blank page or 403**

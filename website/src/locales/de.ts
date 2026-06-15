@@ -25,7 +25,7 @@ export default {
     p3: 'Je mehr du teilst, desto klüger wird es. Aber es teilt immer nur mit dir.',
     memories: '142 Erinnerungen', updated: 'Zuletzt aktualisiert vor 2 Stunden',
     health: 'Zustand des Gehirns', growing: 'Wächst', powers: 'Dein Gehirn betreibt',
-    caption: 'Aus der echten Plattform — app.private-internet.ai',
+    caption: 'Aus der echten Plattform — app.private-internet.io',
     stat1: '142 Erinnerungen', stat2: '6 Module', stat3: '100% privat',
   },
   modules: {

@@ -25,7 +25,7 @@ export default {
     p3: 'Cuanto más compartes con él, más inteligente se vuelve. Pero solo comparte contigo.',
     memories: '142 recuerdos', updated: 'Actualizado hace 2 horas',
     health: 'Salud del Cerebro', growing: 'Creciendo', powers: 'Tu Cerebro impulsa',
-    caption: 'De la plataforma real — app.private-internet.ai',
+    caption: 'De la plataforma real — app.private-internet.io',
     stat1: '142 recuerdos', stat2: '6 módulos', stat3: '100% privado',
   },
   modules: {

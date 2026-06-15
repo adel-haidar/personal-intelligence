@@ -25,7 +25,7 @@ export default {
     p3: '你与它分享得越多，它就越聪明。但它始终只与你一人分享。',
     memories: '142 条记忆', updated: '2 小时前更新',
     health: '大脑状态', growing: '成长中', powers: '你的大脑驱动',
-    caption: '来自真实平台 — app.private-internet.ai',
+    caption: '来自真实平台 — app.private-internet.io',
     stat1: '142 条记忆', stat2: '6 个模块', stat3: '100% 私密',
   },
   modules: {
