@@ -18,18 +18,36 @@ from private_internet.content.fal_video import generate_video_clip
 from private_internet.content.voice_config import get_voice_id
 from private_internet.content.ffmpeg_assembler import VideoAssembler
 from private_internet.content.asset_store import AssetStore
+from private_internet.content.visual_translator import (
+    build_final_prompt,
+    kling_duration,
+    translate_scenes,
+)
 
 logger = logging.getLogger(__name__)
 
+# Spoken script targets ~90–120s; used as the translator's duration hint.
+SIGNAL_TARGET_DURATION_S = 100
 
-async def _section_visual(image_generator, section, creator, idx, title, work_dir) -> str:
+
+async def _section_visual(
+    image_generator, section, creator, idx, title, work_dir, scene=None
+) -> str:
     """Per-section visual path: a generated fal video clip (.mp4) when
-    VIDEO_BACKEND=fal, else a still image (.png). Any fal failure (incl. unfunded
-    balance) falls back to a slide image, so the video always assembles."""
-    if (get_settings().video_backend or "slides").lower() == "fal":
+    VIDEO_BACKEND=fal AND a translated scene prompt is available, else a still
+    image (.png). Any fal failure (incl. unfunded balance) falls back to a slide
+    image, so the video always assembles.
+
+    `scene` is a translated scene dict from the visual translation layer. Only
+    its concrete `kling_prompt` (with the house style suffix) is ever sent to
+    Kling — the abstract topic/script text never is. When no translated scene
+    exists for this section we skip Kling entirely and render a slide."""
+    if scene and (get_settings().video_backend or "slides").lower() == "fal":
         try:
-            prompt = section.image_prompt + " cinematic, slow camera motion, dark editorial, no text"
-            clip = await generate_video_clip(prompt, duration="5", aspect_ratio="16:9")
+            prompt = build_final_prompt(scene)
+            clip = await generate_video_clip(
+                prompt, duration=kling_duration(scene), aspect_ratio="16:9"
+            )
             path = os.path.join(work_dir, f"vis_{idx}.mp4")
             with open(path, "wb") as f:
                 f.write(clip)
@@ -43,6 +61,56 @@ async def _section_visual(image_generator, section, creator, idx, title, work_di
     with open(path, "wb") as f:
         f.write(img)
     return path
+
+
+async def _translate_scenes_for_script(topic: dict, script) -> list:
+    """Visual translation layer (Stage 3): turn the script into one concrete,
+    filmable Kling scene per section. Returns a list aligned to script.sections
+    where each entry is a translated scene dict or None (None → that section
+    renders a slide instead of a Kling clip).
+
+    Skipped (all None) for the slide backend, and degraded to all-None if the
+    translator call fails — the pipeline always produces a video either way.
+    """
+    sections = script.sections
+    scenes_by_section: list = [None] * len(sections)
+
+    if (get_settings().video_backend or "slides").lower() != "fal":
+        return scenes_by_section
+
+    narration_script = " ".join(s.text for s in sections)
+    try:
+        scenes = await translate_scenes(
+            topic=topic["name"],
+            narration_script=narration_script,
+            total_scenes=len(sections),
+            target_duration_seconds=SIGNAL_TARGET_DURATION_S,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Visual translation failed for topic=%r (%s); slides fallback",
+            topic.get("name"), exc,
+        )
+        return scenes_by_section
+
+    for scene in scenes:
+        n = scene.get("scene_number")
+        if not isinstance(n, int) or not (1 <= n <= len(sections)):
+            continue
+        scenes_by_section[n - 1] = scene
+        # Log original + translated prompts for every scene — essential when a
+        # clip still looks wrong.
+        logger.debug(
+            "Visual translation",
+            extra={
+                "scene_number": n,
+                "original_topic": topic["name"][:100],
+                "translated_prompt": scene.get("kling_prompt"),
+                "final_prompt": build_final_prompt(scene),
+            },
+        )
+
+    return scenes_by_section
 
 
 def _select_topic(conn, topic_id: str | None, *, user_id: str) -> dict:
@@ -137,10 +205,19 @@ async def generate_video(topic_id: str | None = None, *, user_id: str) -> str:
         script = await script_generator.generate(topic, creator, research)
         os.makedirs(work_dir, exist_ok=True)
 
+        # 4b. Visual scene translation (NEW). Convert the abstract topic/script
+        # into concrete, filmable Kling prompts — one per section. The original
+        # topic text is NEVER sent to Kling; only these translated prompts are.
+        # Only needed for the fal video backend; the slide backend ignores it.
+        scenes_by_section = await _translate_scenes_for_script(topic, script)
+
         # 5/6. Per-section visuals (fal video clip, or slide fallback) + thumbnail.
         visual_results = await asyncio.gather(
             *(
-                _section_visual(image_generator, s, creator, i, script.title, work_dir)
+                _section_visual(
+                    image_generator, s, creator, i, script.title, work_dir,
+                    scenes_by_section[i],
+                )
                 for i, s in enumerate(script.sections)
             ),
             image_generator.generate_thumbnail(script, creator),
