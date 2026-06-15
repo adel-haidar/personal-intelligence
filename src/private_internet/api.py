@@ -13,7 +13,9 @@ from private_internet.brain.db import init_brain_db
 from private_internet.brain.routes import router as brain_router
 from private_internet.config import get_settings
 from private_internet.content.aria.db import init_aria_db
+from private_internet.content.aria.podcast_db import init_aria_podcast_db
 from private_internet.content.aria.router import router as aria_router
+from private_internet.content.aria.voice_config import warn_if_podcast_voices_unconfigured
 from private_internet.content.creators import seed_default_creators
 from private_internet.content.db import init_content_db
 from private_internet.content.router import router as content_router
@@ -98,6 +100,7 @@ async def lifespan(app: FastAPI):
     _bootstrap_step("init_db", init_db)
     _bootstrap_step("init_content_db", init_content_db)
     _bootstrap_step("init_aria_db", init_aria_db)
+    _bootstrap_step("init_aria_podcast_db", init_aria_podcast_db)
     _bootstrap_step("init_stories_db", init_stories_db)
     _bootstrap_step("seed_default_creators", seed_default_creators)
     _bootstrap_step("migrate_multi_tenancy", migrate_multi_tenancy)
@@ -105,6 +108,8 @@ async def lifespan(app: FastAPI):
     _bootstrap_step("migrate_saas", migrate_saas)
     # Brain Organiser columns/tables depend on the memories table existing.
     _bootstrap_step("init_brain_db", init_brain_db)
+    # Non-fatal: warn (don't fail startup) if podcast voices are still placeholders.
+    _bootstrap_step("check_podcast_voices", warn_if_podcast_voices_unconfigured)
 
     nightly_task = None
     if os.getenv("BRAIN_ORGANISE_NIGHTLY", "true").lower() != "false":

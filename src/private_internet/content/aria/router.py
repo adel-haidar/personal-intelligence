@@ -27,6 +27,21 @@ from private_internet.content.aria.db import (
     unlike_track,
 )
 from private_internet.content.aria.generator import generate_tracks_batch
+from private_internet.content.aria.podcast_db import (
+    count_podcasts,
+    get_podcast,
+    like_podcast,
+    list_podcasts,
+    unlike_podcast,
+)
+from private_internet.content.aria.podcast_generator import generate_podcasts_batch
+from private_internet.content.aria.podcast_models import (
+    PodcastDetailOut,
+    PodcastLikeRequest,
+    PodcastLikeResponse,
+    PodcastStatusOut,
+    PodcastSummaryOut,
+)
 from private_internet.content.aria.models import (
     GenerationStatusOut,
     LibraryOut,
@@ -113,6 +128,42 @@ def _serialize_datetime(v):
     if isinstance(v, datetime):
         return v.isoformat()
     return v
+
+
+def _podcast_summary_out(row: dict) -> PodcastSummaryOut:
+    return PodcastSummaryOut(
+        id=str(row["id"]),
+        title=row["title"],
+        description=row.get("description"),
+        topic_category=row.get("topic_category"),
+        duration_seconds=row.get("duration_seconds"),
+        status=row["status"],
+        art_url=_key_to_url(row.get("art_s3_key")),
+        language_code=row.get("language_code") or "en",
+        is_liked=bool(row.get("is_liked", False)),
+        created_at=row["created_at"],
+    )
+
+
+def _podcast_detail_out(row: dict) -> PodcastDetailOut:
+    return PodcastDetailOut(
+        id=str(row["id"]),
+        title=row["title"],
+        description=row.get("description"),
+        topic_category=row.get("topic_category"),
+        duration_seconds=row.get("duration_seconds"),
+        status=row["status"],
+        art_url=_key_to_url(row.get("art_s3_key")),
+        language_code=row.get("language_code") or "en",
+        is_liked=bool(row.get("is_liked", False)),
+        created_at=row["created_at"],
+        audio_url=_key_to_url(row.get("audio_s3_key")),
+        waveform_url=_key_to_url(row.get("waveform_s3_key")),
+        transcript=row.get("transcript") or [],
+        brain_topic_ids=[str(x) for x in (row.get("brain_topic_ids") or [])],
+        host_a_name=row.get("host_a_name") or "Alex",
+        host_b_name=row.get("host_b_name") or "Jordan",
+    )
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -255,6 +306,78 @@ async def trigger_generation(
     """Trigger music generation for the authenticated user (1–5 tracks)."""
     background_tasks.add_task(generate_tracks_batch, count, user_id=ctx.user_id)
     return {"status": "enqueued", "count": count}
+
+
+# ── Podcasts ────────────────────────────────────────────────────────────────
+
+@router.get("/podcasts", response_model=list[PodcastSummaryOut])
+async def list_podcasts_endpoint(ctx: RequestContext = Depends(get_request_context)):
+    """All ready podcasts for this user (newest first)."""
+    rows = list_podcasts(user_id=ctx.user_id, status="ready", limit=200)
+    return [_podcast_summary_out(r) for r in rows]
+
+
+@router.get("/podcasts/status", response_model=PodcastStatusOut)
+async def podcast_status_endpoint(ctx: RequestContext = Depends(get_request_context)):
+    """Generation status counts for frontend polling."""
+    counts = count_podcasts(user_id=ctx.user_id)
+    return PodcastStatusOut(
+        generating=counts.get("generating", 0),
+        failed=counts.get("failed", 0),
+    )
+
+
+@router.get("/podcasts/{podcast_id}", response_model=PodcastDetailOut)
+async def get_podcast_endpoint(
+    podcast_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Podcast detail: audio/waveform/art URLs + transcript + brain topics."""
+    row = get_podcast(podcast_id, user_id=ctx.user_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Podcast not found")
+    return _podcast_detail_out(row)
+
+
+@router.post("/podcasts/{podcast_id}/like", response_model=PodcastLikeResponse)
+async def like_podcast_endpoint(
+    podcast_id: str,
+    body: PodcastLikeRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Like or unlike a podcast."""
+    row = get_podcast(podcast_id, user_id=ctx.user_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Podcast not found")
+    if body.liked:
+        like_podcast(podcast_id, user_id=ctx.user_id)
+    else:
+        unlike_podcast(podcast_id, user_id=ctx.user_id)
+    return PodcastLikeResponse(podcast_id=podcast_id, liked=body.liked)
+
+
+@router.post("/podcasts/jobs/generate", status_code=202)
+async def trigger_podcast_generation(
+    background_tasks: BackgroundTasks,
+    count: int = Query(default=1, ge=1, le=2),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Trigger podcast generation for the authenticated user (1–2 episodes)."""
+    background_tasks.add_task(generate_podcasts_batch, count, user_id=ctx.user_id)
+    return {"status": "enqueued", "count": count}
+
+
+@router.post("/podcasts/jobs/run", status_code=202)
+async def run_podcast_generation_job_endpoint(
+    background_tasks: BackgroundTasks,
+    count: int = Query(default=2, ge=1, le=2),
+    _: None = Depends(_require_internal_secret),
+):
+    """Internal-secret cron endpoint: generate up to `count` podcasts for ALL
+    onboarded users (max 2 per user per run)."""
+    background_tasks.add_task(run_for_all_users, generate_podcasts_batch, count=count)
+    return {"status": "enqueued", "job": "podcast_generation", "count": count,
+            "scope": "all_users"}
 
 
 @router.post("/jobs/run", status_code=202)

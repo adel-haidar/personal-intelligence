@@ -1,0 +1,11 @@
+[Unit]
+Description=Generate ARIA podcasts for all users
+After=network.target personal-intelligence-api.service
+Wants=personal-intelligence-api.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/home/ec2-user/personal-intelligence/.env
+# Generate up to 2 ARIA podcasts per onboarded user. Async (HTTP 202), fanned
+# over all users; same-host auth via INTERNAL_SECRET. Runs nightly (see the timer).
+ExecStart=/bin/sh -c 'curl -sS -o /dev/null -w "podcasts=%%{http_code} " -X POST -H "X-Internal-Secret: $INTERNAL_SECRET" "http://127.0.0.1:8000/api/aria/podcasts/jobs/run?count=2"; echo'
