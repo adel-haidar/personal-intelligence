@@ -399,14 +399,14 @@ class TestGenerateVideo:
     async def test_batch_runs_sequentially_and_counts_failures(self):
         calls = []
 
-        async def fake_generate(topic_id=None, *, user_id):
+        async def fake_generate(topic_id=None, *, user_id, duration_band="standard"):
             calls.append(topic_id)
             if len(calls) == 2:
                 raise RuntimeError("second one fails")
             return f"video-{len(calls)}"
 
         with patch(
-            "private_internet.content.jobs.video_job.generate_video",
+            "private_internet.content.jobs.video_job.generate_long_video",
             side_effect=fake_generate,
         ):
             result = await generate_videos_batch(count=3, user_id="u1")
@@ -417,10 +417,11 @@ class TestGenerateVideo:
     async def test_batch_with_pinned_topic_runs_once(self):
         mock_gen = AsyncMock(return_value="video-1")
         with patch(
-            "private_internet.content.jobs.video_job.generate_video", new=mock_gen
+            "private_internet.content.jobs.video_job.generate_long_video", new=mock_gen
         ):
             result = await generate_videos_batch(count=3, topic_id="t-1", user_id="u1")
 
         assert mock_gen.call_count == 1
-        assert mock_gen.call_args == call("t-1", user_id="u1")
+        # Scheduled feed uses the cheap short-form WAN band.
+        assert mock_gen.call_args == call("t-1", user_id="u1", duration_band="short")
         assert result["created"] == ["video-1"]

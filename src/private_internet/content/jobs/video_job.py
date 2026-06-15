@@ -329,15 +329,20 @@ def _update_video_progress(conn, video_id: str, patch: dict, *, user_id: str) ->
         cur.close()
 
 
-async def generate_long_video(topic_id: str | None = None, *, user_id: str) -> str:
+async def generate_long_video(
+    topic_id: str | None = None, *, user_id: str, duration_band: str = "standard"
+) -> str:
     """
-    Long-form SIGNAL pipeline (3–5 min) via scene-stitching: scene-by-scene
-    script → N Kling clips (parallel, semaphored, fallback cards) → ElevenLabs
-    narration → FFmpeg stitch → S3. Returns the video_id.
-    # MUST SCOPE BY USER
+    SIGNAL scene-stitching pipeline: scene-by-scene script → N video clips
+    (per-provider routing in video_assembler — SIGNAL→Wan2.1, parallel,
+    semaphored, colour-card fallback) → ElevenLabs narration → FFmpeg stitch →
+    S3. Returns the video_id. # MUST SCOPE BY USER
+
+    `duration_band` selects the SIGNAL_DURATION_TARGETS entry: "short" (~40s,
+    ~5 clips — the cheap default for the scheduled feed) or "standard" (3–5 min).
 
     Unlike generate_video() (the 5-section slide pipeline), this assembles many
-    short clips into one long video via content/video_assembler.assemble_video.
+    short clips into one video via content/video_assembler.assemble_video.
     Per-clip progress is written to content_videos.generation_progress.
 
     On failure the row is set to status='failed' and the exception re-raised.
@@ -366,8 +371,8 @@ async def generate_long_video(topic_id: str | None = None, *, user_id: str) -> s
         conn.commit()
         cur.close()
 
-        # Scene-by-scene script targeting the SIGNAL standard duration band.
-        duration_min, duration_max = SIGNAL_DURATION_TARGETS["standard"]
+        # Scene-by-scene script targeting the requested SIGNAL duration band.
+        duration_min, duration_max = SIGNAL_DURATION_TARGETS[duration_band]
         script = await SceneScriptGenerator().generate(
             topic, creator, research,
             duration_min=duration_min, duration_max=duration_max,
@@ -432,9 +437,14 @@ async def generate_long_video(topic_id: str | None = None, *, user_id: str) -> s
 
 async def generate_videos_batch(count: int = 2, topic_id: str | None = None, *, user_id: str) -> dict:
     """
-    Run generate_video() `count` times sequentially (not parallel — FFmpeg is
-    CPU-bound) for a single user. A pinned topic_id only makes sense for a
-    single video.  # MUST SCOPE BY USER
+    Run the short-form WAN scene-stitching pipeline `count` times sequentially
+    (not parallel — FFmpeg is CPU-bound) for a single user. A pinned topic_id
+    only makes sense for a single video.  # MUST SCOPE BY USER
+
+    Uses generate_long_video(duration_band="short") → real Wan2.1 clips
+    (~€1/video) instead of the legacy fal/Kling+slide pipeline (generate_video,
+    kept for pinned single-shot use). Wan2.1 is funded; fal/Gemini are not, and
+    this path touches neither.
     """
     assert user_id is not None, "user_id must be set before any content operation"
     if topic_id:
@@ -443,7 +453,11 @@ async def generate_videos_batch(count: int = 2, topic_id: str | None = None, *, 
     failed = 0
     for _ in range(count):
         try:
-            created.append(await generate_video(topic_id, user_id=user_id))
+            created.append(
+                await generate_long_video(
+                    topic_id, user_id=user_id, duration_band="short"
+                )
+            )
         except Exception:
             failed += 1
     logger.info(

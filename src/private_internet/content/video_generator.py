@@ -24,6 +24,7 @@ VIDEO_HEIGHT = 720
 # SIGNAL long-form duration target (seconds). STORIES targets live in
 # content/stories/generator.py.
 SIGNAL_DURATION_TARGETS = {
+    "short": (32, 48),               # ~4–6 clips — cheap real video for the feed
     "standard": (180, 300),          # 3–5 minutes
 }
 
