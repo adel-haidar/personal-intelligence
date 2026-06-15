@@ -33,6 +33,11 @@ from private_internet.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# sunoapi.org sits behind Cloudflare, which rejects the default
+# `Python-urllib/x.y` agent with HTTP 403 "error code: 1010" (browser-signature
+# ban). Send a normal browser UA on every request so the calls are accepted.
+_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
 POLL_INTERVAL_SECONDS = 10
 MAX_POLL_ATTEMPTS = 60  # 10 minutes maximum wait per track
 
@@ -94,6 +99,7 @@ class SunoClient:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            "User-Agent": _USER_AGENT,
         }
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -267,7 +273,7 @@ def _http_json(url: str, headers: dict, payload: Optional[dict]) -> dict:
 
 
 def _http_get_bytes(url: str) -> bytes:
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, method="GET", headers={"User-Agent": _USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             return resp.read()
