@@ -71,7 +71,7 @@ const router = createRouter({
   ],
 })
 
-const PUBLIC = new Set(['/', '/login', '/register', '/oauth/callback', '/about', '/forgot-password', '/reset-password'])
+const PUBLIC = new Set(['/', '/login', '/register', '/oauth/callback', '/google-callback', '/about', '/forgot-password', '/reset-password'])
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
