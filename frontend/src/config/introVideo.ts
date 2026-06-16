@@ -23,7 +23,7 @@ export const INTRO_VIDEO_LANGS = ['en', 'de', 'fr', 'ru', 'ar'] as const
 export type IntroVideoLang = (typeof INTRO_VIDEO_LANGS)[number]
 
 // Default: the content CloudFront distribution, /intro prefix. Override via env for self-hosting.
-const DEFAULT_INTRO_VIDEO_BASE = 'https://d20aaqlrgvxz3g.cloudfront.net/intro'
+const DEFAULT_INTRO_VIDEO_BASE = 'https://d34rfs40q4sr2y.cloudfront.net/intro'
 
 // Base URL of the uploaded videos (no trailing slash).
 export const INTRO_VIDEO_BASE: string = (
