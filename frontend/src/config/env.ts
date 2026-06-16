@@ -6,11 +6,10 @@ export const REDIRECT_URI =
   import.meta.env.VITE_REDIRECT_URI ??
   `${window.location.origin}/oauth/callback`
 
-// Backend API base. Dev: relative (vite proxy). Prod: same-origin by default,
-// or an explicit base via VITE_API_BASE_URL (e.g. when the dashboard is served
-// from a different host than the API).
-// Strip trailing /api if present — the secret was historically set to
-// https://app.private-internet.io/api but composables append /api/ themselves.
-export const API_BASE: string = import.meta.env.DEV
-  ? ''
-  : (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/api\/?$/, '')
+// Backend API base. The dashboard is always served same-origin with the API
+// (CloudFront routes /api/* on the same host to the backend; dev uses the Vite
+// proxy), so this is empty — identical to OAUTH_BASE above.
+// NOTE: we deliberately no longer read VITE_API_BASE_URL. A stale build secret
+// still pointing at the retired domain silently baked the dead host into every
+// /api/auth/* call, breaking login / password reset with a NetworkError.
+export const API_BASE = ''
