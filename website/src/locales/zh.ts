@@ -104,10 +104,13 @@ export default {
   },
   footer: {
     tagline: '你的 AI。你的服务器。你的规则。',
-    product: '产品', company: '公司', languages: '语言',
-    productLinks: ['Dashboard', 'GitHub', '文档', '更新日志', '状态'],
-    companyLinks: ['隐私政策', '服务条款', '安全', '联系我们'],
-    copyright: '© 2026 Private Internet。开源，隐私优先。',
+    product: '产品', languages: '语言',
+    links: [
+      { label: 'Dashboard', href: 'https://app.private-internet.io/login' },
+      { label: 'GitHub', href: 'https://github.com/adel-haidar/personal-intelligence' },
+    ],
+    coffee: '请我喝杯咖啡',
+    copyright: 'Adel Haidar',
   },
   mobileMenu: { close: '关闭' },
 }

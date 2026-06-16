@@ -34,13 +34,14 @@ const emit = defineEmits<{
       <div>
         <div class="mk-footer__h">{{ t.footer.product }}</div>
         <div class="mk-footer__links">
-          <button v-for="(l, i) in t.footer.productLinks" :key="i" class="mk-footer__link">{{ l }}</button>
-        </div>
-      </div>
-      <div>
-        <div class="mk-footer__h">{{ t.footer.company }}</div>
-        <div class="mk-footer__links">
-          <button v-for="(l, i) in t.footer.companyLinks" :key="i" class="mk-footer__link">{{ l }}</button>
+          <a
+            v-for="(l, i) in t.footer.links"
+            :key="i"
+            class="mk-footer__link"
+            :href="l.href"
+            target="_blank"
+            rel="noopener"
+          >{{ l.label }}</a>
         </div>
       </div>
       <div>
@@ -57,6 +58,14 @@ const emit = defineEmits<{
         </div>
       </div>
     </div>
-    <div class="mk-footer__bottom">{{ t.footer.copyright }}</div>
+    <div class="mk-footer__bottom">
+      <span>{{ t.footer.copyright }}</span>
+      <a
+        class="mk-footer__coffee"
+        href="https://buymeacoffee.com/adel.haidar"
+        target="_blank"
+        rel="noopener"
+      >☕ {{ t.footer.coffee }}</a>
+    </div>
   </footer>
 </template>

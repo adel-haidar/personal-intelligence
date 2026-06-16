@@ -345,14 +345,16 @@ body { overflow-x: hidden; }
    FOOTER
    ============================================================================ */
 .mk-footer { background: var(--background-surface); border-block-start: 1px solid var(--border-subtle); padding: 72px var(--mk-pad-x) 32px; }
-.mk-footer__cols { max-width: var(--mk-content); margin: 0 auto; display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: var(--space-10); }
+.mk-footer__cols { max-width: var(--mk-content); margin: 0 auto; display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: var(--space-10); }
 .mk-footer__tag { font-size: 13px; color: var(--text-tertiary); margin-block: var(--space-3) var(--space-5); max-width: 220px; line-height: 1.5; }
 .mk-footer__h { font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--text-primary); margin-block-end: var(--space-4); }
 .mk-footer__links { display: flex; flex-direction: column; gap: 10px; }
-.mk-footer__link { font-size: 14px; color: var(--text-secondary); cursor: pointer; background: none; border: none; text-align: start; transition: color .12s var(--ease); }
+.mk-footer__link { font-size: 14px; color: var(--text-secondary); cursor: pointer; background: none; border: none; text-decoration: none; text-align: start; transition: color .12s var(--ease); }
 .mk-footer__link:hover { color: var(--text-primary); }
 .mk-footer__link.is-active { color: var(--accent-primary); }
-.mk-footer__bottom { max-width: var(--mk-content); margin: 56px auto 0; padding-block-start: var(--space-6); border-block-start: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 12px; color: var(--text-tertiary); }
+.mk-footer__bottom { max-width: var(--mk-content); margin: 56px auto 0; padding-block-start: var(--space-6); border-block-start: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 12px; color: var(--text-tertiary); display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.mk-footer__coffee { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); text-decoration: none; padding: 6px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; transition: color .12s var(--ease), border-color .12s var(--ease); }
+.mk-footer__coffee:hover { color: var(--brain-amber); border-color: var(--brain-amber); }
 
 /* ============================================================================
    MODALS

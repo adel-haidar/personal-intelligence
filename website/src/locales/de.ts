@@ -104,10 +104,13 @@ export default {
   },
   footer: {
     tagline: 'Deine KI. Dein Server. Deine Regeln.',
-    product: 'Produkt', company: 'Unternehmen', languages: 'Sprachen',
-    productLinks: ['Dashboard', 'GitHub', 'Dokumentation', 'Changelog', 'Status'],
-    companyLinks: ['Datenschutz', 'Nutzungsbedingungen', 'Sicherheit', 'Kontakt'],
-    copyright: '© 2026 Private Internet. Open-Source, Datenschutz zuerst.',
+    product: 'Produkt', languages: 'Sprachen',
+    links: [
+      { label: 'Dashboard', href: 'https://app.private-internet.io/login' },
+      { label: 'GitHub', href: 'https://github.com/adel-haidar/personal-intelligence' },
+    ],
+    coffee: 'Kauf mir einen Kaffee',
+    copyright: 'Adel Haidar',
   },
   mobileMenu: { close: 'Schließen' },
 }
