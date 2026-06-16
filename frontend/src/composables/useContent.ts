@@ -136,6 +136,8 @@ export function usePulseFeed() {
   const pages = ref(1)
   const total = ref(0)
   const sort = ref<PostSort>('latest')
+  // null = all personas; otherwise scope the feed to one creator server-side.
+  const creator = ref<string | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -147,8 +149,9 @@ export function usePulseFeed() {
     error.value = null
     try {
       const next = page.value + 1
+      const creatorQuery = creator.value ? `&creator_id=${creator.value}` : ''
       const data = await authedGet<Paged<Post>>(
-        `/posts?page=${next}&page_size=${PAGE_SIZE}&sort=${sort.value}`,
+        `/posts?page=${next}&page_size=${PAGE_SIZE}&sort=${sort.value}${creatorQuery}`,
       )
       posts.value = next === 1 ? data.items : [...posts.value, ...data.items]
       page.value = data.page
@@ -161,16 +164,51 @@ export function usePulseFeed() {
     }
   }
 
-  async function setSort(s: PostSort): Promise<void> {
-    if (sort.value === s && page.value > 0) return
-    sort.value = s
+  function reset(): void {
     page.value = 0
     pages.value = 1
     posts.value = []
+  }
+
+  async function setSort(s: PostSort): Promise<void> {
+    if (sort.value === s && page.value > 0) return
+    sort.value = s
+    reset()
     await loadMore()
   }
 
-  return { posts, page, pages, total, sort, loading, error, hasMore, loadMore, setSort }
+  // Select a persona (or null for the full feed) and reload from the server so
+  // we see *all* of that creator's posts, not just the ones already paged in.
+  async function setCreator(id: string | null): Promise<void> {
+    if (creator.value === id && page.value > 0) return
+    creator.value = id
+    reset()
+    await loadMore()
+  }
+
+  return { posts, page, pages, total, sort, creator, loading, error, hasMore, loadMore, setSort, setCreator }
+}
+
+// ── Creator personas (the "people" of the PULSE feed) ──────────────────────
+
+export function useCreators() {
+  const creators = ref<Creator[]>([])
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+
+  async function load(): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      creators.value = await authedGet<Creator[]>('/creators')
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return { creators, loading, error, load }
 }
 
 // ── SIGNAL video library (composable, no Pinia) ────────────────────────────
