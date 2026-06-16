@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from fastapi import FastAPI
 
-from private_internet.auth.oauth import create_oauth_tables
+from private_internet.auth.oauth import bootstrap_oauth_user_binding, create_oauth_tables
 from private_internet.auth.routes import router as auth_router
 from private_internet.billing.routes import router as billing_router
 from private_internet.brain.db import init_brain_db
@@ -112,6 +112,8 @@ async def lifespan(app: FastAPI):
     _bootstrap_step("migrate_multi_tenancy", migrate_multi_tenancy)
     # SaaS columns/tables depend on users + content_creators already existing.
     _bootstrap_step("migrate_saas", migrate_saas)
+    # OAuth→user binding FK + backfill; needs the `users` table to exist (above).
+    _bootstrap_step("bootstrap_oauth_user_binding", bootstrap_oauth_user_binding)
     # Brain Organiser columns/tables depend on the memories table existing.
     _bootstrap_step("init_brain_db", init_brain_db)
     # Non-fatal: warn (don't fail startup) if podcast voices are still placeholders.

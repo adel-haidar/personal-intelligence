@@ -12,11 +12,33 @@ from private_internet.auth.oauth import (
     register_client,
 )
 from private_internet.config import get_settings
+from private_internet.users.tokens import decode_user_token
 
 router = APIRouter()
 
 _SESSION_COOKIE = "pi_session"
 _SESSION_MAX_AGE = 86400  # 24 hours
+
+# Cookie the dashboard SPA may set with the logged-in user's platform JWT so the
+# OAuth consent step can bind the authorization to the REAL platform user. Also
+# accepted as a `platform_jwt` query/form param. Optional — when absent the flow
+# behaves exactly as before and the token resolves to the seed admin.
+_PLATFORM_JWT_COOKIE = "pi_jwt"
+
+
+def _platform_user_id(jwt_value: str | None) -> str | None:
+    """Decode a platform JWT and return its subject (user id), or None.
+
+    Never raises — an invalid/expired/missing JWT yields None so the OAuth flow
+    is never broken by a bad cookie; it simply falls back to seed-admin binding.
+    """
+    if not jwt_value:
+        return None
+    claims = decode_user_token(jwt_value)
+    if not claims:
+        return None
+    sub = claims.get("sub")
+    return str(sub) if sub else None
 
 
 def _sign(value: str, secret: str) -> str:
@@ -159,7 +181,9 @@ async def authorize(
     code_challenge: str,
     code_challenge_method: str,
     state: str = "",
+    platform_jwt: str = "",
     pi_session: str | None = Cookie(default=None),
+    pi_jwt: str | None = Cookie(default=None),
 ):
     if not _is_authenticated(pi_session):
         hidden = _hidden_fields(
@@ -171,10 +195,14 @@ async def authorize(
         )
         return HTMLResponse(_LOGIN_FORM.format(hidden=hidden, error=""))
 
+    # Bind to the logged-in platform user if a JWT is presented (query param wins
+    # over cookie); otherwise leave unbound → resolves to seed admin downstream.
+    user_id = _platform_user_id(platform_jwt or pi_jwt)
     code = create_auth_code(
         client_id=client_id,
         code_challenge=code_challenge,
         redirect_uri=redirect_uri,
+        user_id=user_id,
     )
     return RedirectResponse(url=f"{redirect_uri}?code={code}&state={state}")
 
@@ -187,6 +215,8 @@ async def authorize_login(
     code_challenge_method: str = Form(),
     state: str = Form(""),
     password: str = Form(),
+    platform_jwt: str = Form(""),
+    pi_jwt: str | None = Cookie(default=None),
 ):
     settings = get_settings()
     hidden = _hidden_fields(
@@ -204,10 +234,12 @@ async def authorize_login(
         )
 
     session_token = _make_session_token(settings.dashboard_password)
+    user_id = _platform_user_id(platform_jwt or pi_jwt)
     code = create_auth_code(
         client_id=client_id,
         code_challenge=code_challenge,
         redirect_uri=redirect_uri,
+        user_id=user_id,
     )
     response = RedirectResponse(
         url=f"{redirect_uri}?code={code}&state={state}", status_code=303

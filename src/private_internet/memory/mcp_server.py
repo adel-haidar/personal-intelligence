@@ -6,10 +6,12 @@ import hmac
 import os
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import TokenVerifier, AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.transport_security import TransportSecuritySettings
 
+from private_internet.auth.oauth import resolve_token_user
 from private_internet.auth.oauth import validate_token as check_token
 from private_internet.config import get_settings
 from private_internet.memory.service import (
@@ -51,18 +53,32 @@ transport_security = TransportSecuritySettings(
 )
 
 
+# Sentinel placed in AccessToken.client_id when the caller authenticated with the
+# shared INTERNAL_SECRET (same-host agents service). _mcp_user_id() maps this to
+# the seed admin — that path MUST NOT change.
+_INTERNAL_CLIENT_ID = "internal-service"
+
+
 class PostgresTokenVerifier(TokenVerifier):
     async def verify_token(self, token: str) -> AccessToken | None:
         # Same-host services authenticate with the shared INTERNAL_SECRET — the
-        # same credential the REST RequestContext accepts. The MCP tools scope to
-        # the seed admin via _mcp_user_id(), so this grants seed-admin access.
+        # same credential the REST RequestContext accepts. They scope to the seed
+        # admin (see _mcp_user_id), so we leave `subject` unset and tag the
+        # client_id with the internal sentinel.
         internal_secret = os.getenv("INTERNAL_SECRET")
         if internal_secret and hmac.compare_digest(token, internal_secret):
-            return AccessToken(token=token, client_id="internal-service", scopes=[])
+            return AccessToken(token=token, client_id=_INTERNAL_CLIENT_ID, scopes=[])
         client_id = check_token(token)
         if not client_id:
             return None
-        return AccessToken(token=token, client_id=client_id, scopes=[])
+        # Bind the AccessToken to the platform user who authorized this OAuth
+        # token (RFC 7662/9068 `sub`). resolve_token_user() returns None for
+        # legacy/unbound tokens, in which case _mcp_user_id() falls back to the
+        # seed admin so already-connected claude.ai sessions keep working.
+        user_id = resolve_token_user(token)
+        return AccessToken(
+            token=token, client_id=client_id, scopes=[], subject=user_id
+        )
 
 
 mcp = FastMCP(
@@ -74,10 +90,30 @@ mcp = FastMCP(
 
 
 def _mcp_user_id() -> str:
-    """MCP connections authenticate with legacy OAuth tokens, which carry no
-    user identity — they are scoped to the seed admin's brain. Per-user MCP
-    access is a future feature."""
+    """Resolve the platform user owning the current MCP request's brain.
+
+    Mechanism: FastMCP runs sync @mcp.tool functions inside the same async task
+    that handled the request (see func_metadata.call_fn_with_arg_validation —
+    sync tools are invoked directly, NOT dispatched to a worker thread), so the
+    contextvar set by AuthContextMiddleware is in scope. get_access_token()
+    returns the AccessToken our PostgresTokenVerifier.verify_token produced, whose
+    `subject` carries the bound platform user_id.
+
+    Resolution order:
+    - INTERNAL_SECRET (client_id == internal sentinel) → seed admin. UNCHANGED.
+    - OAuth token bound to a user (subject set) → that real user.
+    - Legacy/unbound OAuth token (subject None) → seed admin fallback, so
+      already-connected claude.ai sessions keep resolving to the owner until
+      they re-authorize.
+    - No auth context at all → seed admin (defensive; should not happen behind
+      the bearer-auth middleware).
+    """
     from private_internet.users.service import get_seed_admin_id
+
+    access = get_access_token()
+    if access is not None:
+        if access.client_id != _INTERNAL_CLIENT_ID and access.subject:
+            return access.subject
     return get_seed_admin_id()
 
 

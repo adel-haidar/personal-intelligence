@@ -32,10 +32,27 @@ const PKCE = {
   postRoute: 'pi_post_login_route',
 } as const
 
+// Name the backend reads at /api/oauth/authorize to bind a claude.ai MCP
+// connection to the logged-in platform user (per-user MCP). See auth/routes.py.
+const PLATFORM_JWT_COOKIE = 'pi_jwt'
+
+function setPlatformJwtCookie(token: string, expMs: number): void {
+  const maxAge = Math.max(0, Math.floor((expMs - Date.now()) / 1000))
+  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
+  // SameSite=Lax so the cookie is sent on the top-level redirect claude.ai makes
+  // to /api/oauth/authorize, but not on cross-site sub-requests.
+  document.cookie = `${PLATFORM_JWT_COOKIE}=${token}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`
+}
+
+function clearPlatformJwtCookie(): void {
+  document.cookie = `${PLATFORM_JWT_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`
+}
+
 function clearTokens(): void {
   tokenStore.removeItem(SS.access)
   tokenStore.removeItem(SS.refresh)
   tokenStore.removeItem(SS.expiresAt)
+  clearPlatformJwtCookie()
 }
 
 export function isAuthenticated(): boolean {
@@ -172,6 +189,9 @@ function storeJwt(token: string): void {
   tokenStore.setItem(SS.expiresAt, String(expMs))
   // No refresh token on this auth path.
   tokenStore.removeItem(SS.refresh)
+  // Mirror the JWT into a cookie so a claude.ai MCP connection initiated while
+  // logged in binds to this user (per-user MCP). Absent → seed-admin fallback.
+  setPlatformJwtCookie(token, expMs)
 }
 
 // ── Google sign-in (social IdP) ───────────────────────────────────────────
