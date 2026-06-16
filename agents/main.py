@@ -326,9 +326,9 @@ async def analyse_bank_statement(req: AnalyseRequest, settings: SettingsDep, ide
         raise HTTPException(
             status_code=422,
             detail=(
-                f"No bank statements found in MCP memory for "
+                f"No bank statements found in your brain for "
                 f"period {months[0]} – {months[-1]}. "
-                f"Please upload statements via the File Repository."
+                f"Please upload your statement(s) to your brain first."
             ),
         )
 

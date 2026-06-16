@@ -48,7 +48,17 @@ export function useFileUpload() {
 
       xhr.onload = () => {
         if (xhr.status === 200) {
-          record.serverResponse = JSON.parse(xhr.responseText) as UploadFile['serverResponse']
+          let saved: { memory_id?: string; filename?: string; status?: string } | undefined
+          try {
+            saved = (JSON.parse(xhr.responseText) as {
+              files?: { memory_id?: string; filename?: string; status?: string }[]
+            }).files?.[0]
+          } catch { /* leave undefined */ }
+          record.serverResponse = {
+            id:       saved?.memory_id ?? '',
+            filename: saved?.filename ?? record.file.name,
+            indexed:  saved?.status === 'ok',
+          }
           record.status   = 'success'
           record.progress = 100
           resolve()

@@ -104,8 +104,13 @@ async function uploadFile(file: File) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
       throw new Error(err.detail ?? `HTTP ${res.status}`)
     }
-    const data = await res.json() as { filename: string; memory_id: string }
-    uploadState.value.result = { ok: true, message: `${data.filename} saved — ID: ${data.memory_id}` }
+    const data = await res.json() as {
+      files?: { status?: string; error?: string; filename: string; memory_id?: string }[]
+    }
+    const saved = data.files?.find((f) => f.status === 'ok')
+    const failed = data.files?.find((f) => f.error)
+    if (!saved) throw new Error(failed?.error ?? 'File was not added to your brain')
+    uploadState.value.result = { ok: true, message: `${saved.filename} added to your brain` }
     await fetchMemories()
   } catch (err) {
     uploadState.value.result = { ok: false, message: (err as Error).message ?? 'Upload failed' }

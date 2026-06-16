@@ -293,7 +293,10 @@ async function handleFileChange(event: Event): Promise<void> {
       headers: { Authorization: `Bearer ${token}` },
       body: form,
     })
-    if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `Upload failed: ${res.status}` }))
+      throw new Error(err.detail ?? `Upload failed: ${res.status}`)
+    }
 
     toast(
       files.length === 1

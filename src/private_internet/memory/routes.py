@@ -230,5 +230,24 @@ async def upload_file(
     os.makedirs(upload_dir, exist_ok=True)
 
     results = [await _save_uploaded_file(f, upload_dir, ctx.user_id) for f in files]
+    saved = [r for r in results if r.get("status") == "ok"]
+    failed = [r for r in results if r.get("error")]
 
-    return {"status": "ok", "count": len(results), "files": results}
+    # This endpoint used to return HTTP 200 unconditionally, so the dashboard
+    # showed a "success" toast even when a file was rejected (unsupported type,
+    # or a PDF with no extractable text) and nothing reached the brain. Surface
+    # an all-failed batch as a 400 with the concrete reason(s) so every uploader
+    # — all of which gate on res.ok — reports the truth.
+    if failed and not saved:
+        raise HTTPException(
+            status_code=400,
+            detail=" ".join(r["error"] for r in failed),
+        )
+
+    return {
+        "status": "partial" if failed else "ok",
+        "count": len(saved),
+        "saved": len(saved),
+        "failed": len(failed),
+        "files": results,
+    }
