@@ -35,11 +35,18 @@ const featured = computed<Video | null>(() => {
 })
 const recent = computed(() => filtered.value.filter((v) => v.id !== featured.value?.id))
 
-const byCategory = computed(() =>
-  cats.value
+// A topic earns its own row only if it has enough videos to fill one;
+// topics with a single video are pooled into "Miscellaneous" so we don't
+// waste a full row (and the user's scroll) on one card.
+const MIN_ROW = 2
+const byCategory = computed(() => {
+  const sections = cats.value
     .map((c) => ({ cat: c, vids: videos.value.filter((v) => catOf(v) === c && v.id !== featured.value?.id) }))
-    .filter((s) => s.vids.length > 0),
-)
+    .filter((s) => s.vids.length > 0)
+  const rows = sections.filter((s) => s.vids.length >= MIN_ROW).map((s) => ({ ...s, misc: false }))
+  const misc = sections.filter((s) => s.vids.length < MIN_ROW).flatMap((s) => s.vids)
+  return misc.length ? [...rows, { cat: 'Miscellaneous', vids: misc, misc: true }] : rows
+})
 
 const relatedFor = (v: Video) =>
   videos.value.filter((x) => x.id !== v.id && isPlayable(x) && catOf(x) === catOf(v)).slice(0, 8)
@@ -112,7 +119,7 @@ function play(v: Video) {
 
       <!-- by category (only on All) -->
       <template v-if="cat === 'All'">
-        <SignalSection v-for="s in byCategory" :key="s.cat" :title="s.cat" accent see-all @all="cat = s.cat">
+        <SignalSection v-for="s in byCategory" :key="s.cat" :title="s.cat" accent :see-all="!s.misc" @all="cat = s.cat">
           <SignalVideoCard v-for="v in s.vids" :key="v.id" :video="v" @play="play(v)" />
         </SignalSection>
       </template>
