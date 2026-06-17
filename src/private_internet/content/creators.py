@@ -10,6 +10,7 @@ These are intentionally language-neutral and topic-neutral — no EU/Swiss bias.
 
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from psycopg2.extras import RealDictCursor
 
@@ -109,15 +110,25 @@ def seed_default_creators() -> int:
     return inserted
 
 
-def list_creators(active_only: bool = True) -> list[dict]:
-    """List all creators (global + per-user). Callers that only want a specific
-    user's visible set should query directly with the user_id filter."""
+def list_creators(active_only: bool = True, user_id: Optional[str] = None) -> list[dict]:
+    """List creators visible to one user: the global basics (user_id IS NULL)
+    plus that user's own brain-generated personas.
+
+    Scoping by user_id is REQUIRED for any user-facing call — per-user personas
+    (migration 0015) are private, so an unscoped list leaks every tenant's
+    personas into everyone's "People" sidebar. Passing user_id=None returns the
+    full cross-tenant set and must only be used by admin/maintenance code.
+    # MUST SCOPE BY USER
+    """
     conn = _connect()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    if active_only:
-        cur.execute("SELECT * FROM content_creators WHERE is_active = TRUE ORDER BY name")
-    else:
-        cur.execute("SELECT * FROM content_creators ORDER BY name")
+    where = ["is_active = TRUE"] if active_only else []
+    params: list = []
+    if user_id is not None:
+        where.append("(user_id IS NULL OR user_id = %s)")
+        params.append(user_id)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    cur.execute(f"SELECT * FROM content_creators{clause} ORDER BY name", params)
     rows = cur.fetchall()
     cur.close()
     conn.close()

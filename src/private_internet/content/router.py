@@ -19,7 +19,9 @@ from private_internet.content.jobs.video_job import generate_videos_batch
 router = APIRouter(prefix="/api/content")
 
 # All read/write endpoints are scoped to the authenticated user.
-# MUST SCOPE BY USER  (creators are shared platform personas — no scoping)
+# MUST SCOPE BY USER. NOTE: content_creators is a MIX since migration 0015 —
+# global basics (user_id IS NULL) are shared, but per-user personas are private,
+# so creator listings must still filter by (user_id IS NULL OR user_id = ctx).
 
 
 async def _require_internal_secret(
@@ -56,7 +58,10 @@ class InteractionEvent(BaseModel):
 
 @router.get("/creators")
 async def get_creators(ctx: RequestContext = Depends(get_request_context)):
-    return list_creators(active_only=True)
+    # MUST SCOPE BY USER: global basics (user_id IS NULL) + this user's own
+    # personas only. An unscoped list leaks every tenant's personas into the
+    # "People" sidebar.
+    return list_creators(active_only=True, user_id=ctx.user_id)
 
 
 # Sort modes for the PULSE feed (Phase 5). Values are vetted ORDER BY clauses —
