@@ -2,12 +2,21 @@ import logging
 from typing import Optional
 
 import boto3
+from botocore.config import Config
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from assistant.job import agent as job_agent
 from assistant.job import countries as job_countries
-from assistant.job.db import init_pool, list_matches, set_status
+from assistant.job.db import (
+    fail_run,
+    finish_run,
+    get_latest_run,
+    init_pool,
+    list_matches,
+    set_status,
+    start_run,
+)
 from assistant.job.models import RunReport
 from assistant.job.report import format_report
 from assistant.shared.auth import require_user
@@ -72,7 +81,13 @@ async def trigger_run(
 
     pool = await init_pool(settings.database_url)
     user_id = await _resolve_user_id(ident, pool)
-    background_tasks.add_task(_run_job_agent, settings, user_id, ident["token"], codes)
+    # Record the run as 'running' before we return so a poll of /report
+    # immediately reflects real state — and a crash/restart mid-run leaves a
+    # row that /report surfaces as 'interrupted' instead of a silent 404.
+    run_id = await start_run(pool, user_id=user_id, countries=codes)
+    background_tasks.add_task(
+        _run_job_agent, settings, user_id, ident["token"], codes, run_id
+    )
     return {
         "status": "started",
         "message": "Job hunt agent running in background. Poll GET /api/jobs/report for results.",
@@ -120,12 +135,46 @@ async def update_status(
 async def get_report(settings: Settings = Depends(get_settings), ident: dict = Depends(require_user)):
     pool = await init_pool(settings.database_url) if settings.database_url else None
     user_id = await _resolve_user_id(ident, pool) if pool else (ident.get("user_id") or "")
+
+    # Persistent run status is the source of truth for whether a run is still
+    # going, finished, or died — it survives a service restart, so the frontend
+    # can stop polling instead of waiting out its 30-min timeout on a 404.
+    latest = await get_latest_run(pool, user_id=user_id) if pool else None
+    run_status = latest["status"] if latest else "idle"
+
+    # The DB status is authoritative. Only serve the rich in-memory report when
+    # the latest run is actually finished — otherwise a stale report from a
+    # previous run would make a freshly-started run look 'completed' instantly.
     report = _latest_reports.get(user_id)
-    if report is None:
+    if report is not None and run_status in ("completed", "idle"):
+        # Report 'completed' even if the run saved no NEW matches
+        # (db_saved_this_run == 0) so the UI doesn't hang on a re-run.
+        return {
+            "status": "completed",
+            "report": format_report(report),
+            "data": report,
+        }
+
+    if latest is None:
         raise HTTPException(
-            404, "No completed run yet — call GET /api/jobs/run to start one."
+            404, "No run yet — call GET /api/jobs/run to start one."
         )
-    return {"report": format_report(report), "data": report}
+
+    # A run finished (or died) on a different process: the rich report is gone
+    # but its matches are persisted and queryable via /api/jobs/matches.
+    return {
+        "status": run_status,
+        "error": latest.get("error"),
+        "run": {
+            "started_at": latest["started_at"].isoformat() if latest.get("started_at") else None,
+            "finished_at": latest["finished_at"].isoformat() if latest.get("finished_at") else None,
+            "strong_count": latest.get("strong_count", 0),
+            "good_count": latest.get("good_count", 0),
+            "saved_count": latest.get("saved_count", 0),
+        },
+        "report": None,
+        "data": None,
+    }
 
 
 async def _run_job_agent(
@@ -133,8 +182,20 @@ async def _run_job_agent(
     user_id: str,
     token: Optional[str] = None,
     countries: Optional[list[str]] = None,
+    run_id: Optional[int] = None,
 ) -> None:
-    bedrock_client = boto3.client("bedrock-runtime", region_name=settings.aws_region)
+    # Bound every Bedrock call: without a read timeout a single hung/throttled
+    # request stalls the whole run indefinitely. Adaptive retries add client-side
+    # rate-limiting so concurrent scoring backs off instead of erroring out.
+    bedrock_client = boto3.client(
+        "bedrock-runtime",
+        region_name=settings.aws_region,
+        config=Config(
+            connect_timeout=10,
+            read_timeout=60,
+            retries={"max_attempts": 4, "mode": "adaptive"},
+        ),
+    )
     memory_client = None
 
     if settings.mcp_memory_url:
@@ -162,10 +223,27 @@ async def _run_job_agent(
             max_per_query=settings.scraper_max_results_per_query,
             user_id=user_id,
             countries=countries or [],
+            score_concurrency=settings.job_score_concurrency,
         )
         _latest_reports[user_id] = report
-    except Exception:
+        if run_id is not None and settings.database_url:
+            pool = await init_pool(settings.database_url)
+            await finish_run(
+                pool, run_id,
+                strong=len(report.strong_matches),
+                good=len(report.good_matches),
+                saved=report.db_saved_this_run,
+            )
+    except Exception as exc:
+        # Never fail silently: record the failure on the run row so /report can
+        # tell the user the run died (and why) instead of polling forever.
         logger.exception("Job hunt agent run failed")
+        if run_id is not None and settings.database_url:
+            try:
+                pool = await init_pool(settings.database_url)
+                await fail_run(pool, run_id, f"{type(exc).__name__}: {exc}")
+            except Exception:
+                logger.exception("Could not record job run failure")
 
 
 def _get_mcp_token(settings: Settings) -> Optional[str]:

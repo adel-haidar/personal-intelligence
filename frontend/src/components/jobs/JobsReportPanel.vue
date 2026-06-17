@@ -39,7 +39,7 @@ async function copyReport(): Promise<void> {
       <div v-if="!store.state.lastReport" class="no-report">
         No report available — run the agent first.
       </div>
-      <template v-else>
+      <template v-else-if="store.state.lastReport.report">
         <div class="report-actions">
           <button class="btn btn-secondary copy-btn" @click="copyReport()">
             {{ copied ? 'Copied!' : 'Copy' }}
@@ -47,6 +47,12 @@ async function copyReport(): Promise<void> {
         </div>
         <pre class="report-pre">{{ store.state.lastReport.report }}</pre>
       </template>
+      <div v-else class="no-report">
+        {{ store.state.lastReport.error
+          || (store.state.lastReport.status === 'running'
+            ? 'Run in progress…'
+            : 'Run finished — open the matches list to see results.') }}
+      </div>
     </div>
   </div>
 </template>

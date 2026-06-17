@@ -8,7 +8,7 @@ from typing import Optional
 
 from assistant.job.countries import name_for
 from assistant.job.db import count_all, init_pool, upsert_match
-from assistant.job.models import JobListing, RunReport, ScoredListing
+from assistant.job.models import JobListing, MatchResult, RunReport, ScoredListing
 from assistant.job.report import format_report
 from assistant.job.scorer import JobScorer
 from assistant.job.scrapers.rapidapi import RapidApiScraper
@@ -121,6 +121,7 @@ async def run_agent(
     max_per_query: int,
     user_id: str,
     countries: list[str],
+    score_concurrency: int = 6,
 ) -> RunReport:
     timestamp = datetime.utcnow()
     pool = await init_pool(database_url)
@@ -221,7 +222,8 @@ async def run_agent(
     rejection_log: dict[str, list[str]] = defaultdict(list)
     db_saved = 0
 
-    loop = asyncio.get_event_loop()
+    # Search-results pages are rejected up front with a cheap regex — no LLM call.
+    to_score: list[JobListing] = []
     for listing in deduped:
         if is_search_results_page(listing):
             logger.info(
@@ -233,8 +235,23 @@ async def run_agent(
                 f"{listing.company} — {listing.title}"
             )
             continue
+        to_score.append(listing)
 
-        result = await loop.run_in_executor(None, scorer.score, listing)
+    # Score listings concurrently. The per-listing Bedrock call dominates the
+    # run's wall time, so scoring them one-at-a-time made a run take 10-15 min;
+    # a bounded semaphore keeps that to a couple of minutes without hammering
+    # Bedrock into throttling. Scoring (read-only LLM) is parallel; the DB
+    # upserts and aggregation below stay sequential and deterministic.
+    loop = asyncio.get_event_loop()
+    sem = asyncio.Semaphore(max(1, score_concurrency))
+
+    async def _score(listing: JobListing) -> tuple[JobListing, Optional[MatchResult]]:
+        async with sem:
+            return listing, await loop.run_in_executor(None, scorer.score, listing)
+
+    scored_pairs = await asyncio.gather(*(_score(item) for item in to_score))
+
+    for listing, result in scored_pairs:
         if result is None:
             continue
 

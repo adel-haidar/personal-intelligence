@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     scraper_max_results_per_query: int = 20
     """Maximum job listings to collect per search query."""
 
+    job_score_concurrency: int = 6
+    """How many job listings to score with Bedrock in parallel. The per-listing
+    LLM call dominates a run's wall time; raising this shortens runs but risks
+    Bedrock throttling. Lower it if you see ThrottlingException in the logs."""
+
 
 @lru_cache
 def get_settings() -> Settings:

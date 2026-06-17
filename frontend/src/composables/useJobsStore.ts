@@ -118,7 +118,7 @@ async function fetchReport(): Promise<void> {
   try {
     const report = await api.fetchReport()
     state.lastReport = report
-    if (report.data.timestamp) {
+    if (report.data?.timestamp) {
       state.lastRunAt = report.data.timestamp
     }
   } catch {
@@ -174,16 +174,25 @@ async function triggerRun(): Promise<void> {
     try {
       const report = await api.fetchReport()
       state.lastReport = report
-      if (report.data.timestamp) state.lastRunAt = report.data.timestamp
+      if (report.data?.timestamp) state.lastRunAt = report.data.timestamp
 
-      if (report.data.db_saved_this_run > 0) {
+      // Completion is driven by the run's persisted status, not by whether it
+      // found NEW matches — a re-run that surfaces the same jobs saves 0 rows
+      // but is still 'completed'. A killed/failed run reports its status too,
+      // so we stop polling instead of waiting out the 30-min timeout.
+      if (report.status === 'completed') {
         stopPolling()
         state.isRunning = false
         state.runStatus = 'done'
         await fetchMatches()
+      } else if (report.status === 'failed' || report.status === 'interrupted') {
+        stopPolling()
+        state.isRunning = false
+        state.runStatus = 'error'
+        state.error = report.error || 'The job run did not finish — try again.'
       }
     } catch {
-      // silently continue polling
+      // 404 before the first run row appears — keep polling.
     }
   }, 5000)
 }

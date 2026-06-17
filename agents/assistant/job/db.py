@@ -47,6 +47,24 @@ CREATE INDEX IF NOT EXISTS idx_jm_tier    ON job_matches (match_tier);
 CREATE INDEX IF NOT EXISTS idx_jm_run     ON job_matches (run_timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_jm_status  ON job_matches (status);
 CREATE INDEX IF NOT EXISTS idx_jm_user    ON job_matches (user_id);
+
+-- Per-user run lifecycle so a run's status survives a service restart and a
+-- failure is never silent. A row is created 'running' when a run starts and
+-- transitioned to 'completed' / 'failed' when it ends. A 'running' row left
+-- behind by a killed process is reported as 'interrupted' once it goes stale.
+CREATE TABLE IF NOT EXISTS job_runs (
+    id            SERIAL PRIMARY KEY,
+    user_id       UUID            NOT NULL,
+    status        VARCHAR(20)     NOT NULL DEFAULT 'running',
+    started_at    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    finished_at   TIMESTAMPTZ,
+    error         TEXT,
+    countries     TEXT[],
+    strong_count  INT             NOT NULL DEFAULT 0,
+    good_count    INT             NOT NULL DEFAULT 0,
+    saved_count   INT             NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_jr_user ON job_runs (user_id, started_at DESC);
 """
 
 # ADD CONSTRAINT has no IF NOT EXISTS, so the per-user unique is applied separately.
@@ -204,3 +222,74 @@ async def set_status(pool: asyncpg.Pool, match_id: int, status: str, *, user_id:
             status, match_id, user_id,
         )
         return tag == "UPDATE 1"
+
+
+# A 'running' row older than this with no result is assumed to belong to a
+# process that was restarted (e.g. by a deploy) and is reported as interrupted.
+_RUN_STALE_AFTER_MINUTES = 15
+
+
+async def start_run(pool: asyncpg.Pool, *, user_id: str, countries: list[str]) -> int:
+    """Open a new run row and supersede any stale 'running' rows for this user.
+
+    Returns the new run id so the caller can finish/fail it later.  # MUST SCOPE BY USER
+    """
+    async with pool.acquire() as conn:
+        # A leftover 'running' row means a previous run never reported back
+        # (process killed mid-run). Close it so it can't mask the new one.
+        await conn.execute(
+            "UPDATE job_runs SET status = 'failed', finished_at = NOW(), "
+            "error = 'interrupted — superseded by a newer run' "
+            "WHERE user_id = $1::uuid AND status = 'running'",
+            user_id,
+        )
+        return await conn.fetchval(
+            "INSERT INTO job_runs (user_id, status, countries) "
+            "VALUES ($1::uuid, 'running', $2) RETURNING id",
+            user_id, countries,
+        )
+
+
+async def finish_run(
+    pool: asyncpg.Pool, run_id: int, *, strong: int, good: int, saved: int
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE job_runs SET status = 'completed', finished_at = NOW(), "
+            "strong_count = $2, good_count = $3, saved_count = $4 WHERE id = $1",
+            run_id, strong, good, saved,
+        )
+
+
+async def fail_run(pool: asyncpg.Pool, run_id: int, error: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE job_runs SET status = 'failed', finished_at = NOW(), "
+            "error = $2 WHERE id = $1",
+            run_id, error[:2000],
+        )
+
+
+async def get_latest_run(pool: asyncpg.Pool, *, user_id: str) -> Optional[dict]:
+    """The user's most recent run, with stale 'running' rows reported as
+    'interrupted' so a killed process surfaces as a real failure.  # MUST SCOPE BY USER"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, status, started_at, finished_at, error, "
+            "strong_count, good_count, saved_count, "
+            "EXTRACT(EPOCH FROM (NOW() - started_at)) AS age_seconds "
+            "FROM job_runs WHERE user_id = $1::uuid "
+            "ORDER BY started_at DESC LIMIT 1",
+            user_id,
+        )
+    if row is None:
+        return None
+    data = dict(row)
+    age_seconds = data.pop("age_seconds", 0) or 0
+    if data["status"] == "running" and age_seconds > _RUN_STALE_AFTER_MINUTES * 60:
+        data["status"] = "interrupted"
+        data["error"] = (
+            "The run was interrupted before it finished (the service likely "
+            "restarted). Start it again."
+        )
+    return data

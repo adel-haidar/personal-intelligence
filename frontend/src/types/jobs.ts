@@ -42,8 +42,26 @@ export interface MatchesResponse {
   matches: JobMatch[]
 }
 
+export type RunStatus =
+  | 'idle'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'interrupted'
+
 export interface RunReport {
-  report: string
+  // 'completed' carries a full report+data; other statuses carry null data and
+  // (for failed/interrupted) an error message.
+  status: RunStatus
+  error?: string | null
+  run?: {
+    started_at: string | null
+    finished_at: string | null
+    strong_count: number
+    good_count: number
+    saved_count: number
+  }
+  report: string | null
   data: {
     timestamp: string
     platforms: string[]
@@ -58,7 +76,7 @@ export interface RunReport {
     rejection_log: Record<string, string[]>
     db_saved_this_run: number
     db_cumulative: number
-  }
+  } | null
 }
 
 export interface RunResponse {
