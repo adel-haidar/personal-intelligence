@@ -139,6 +139,10 @@ class Settings(BaseSettings):
     stripe_price_pro: str = ""         # price_… for the Pro tier
     stripe_price_max: str = ""         # price_… for the Max tier
     stripe_trial_days: int = 0         # 0 = no trial; >0 = card-required free trial
+    # Tester / early-adopter access codes. Comma-separated list seeded at startup
+    # as multi-use coupons granting the Max plan for 30 days (no card, no Stripe).
+    # e.g. TESTER_COUPONS="EARLYBIRD,FRIENDS2026". Empty → no seeded codes.
+    tester_coupons: str = ""
 
     # ── Social login (Google OAuth) ─────────────────────────────
     # Inert until BOTH are set: the dashboard "Continue with Google" button then

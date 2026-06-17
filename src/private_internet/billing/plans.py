@@ -14,6 +14,8 @@ Gating is INERT while billing is disabled: ``effective_plan`` returns "max" when
 Stripe prices + the flag are configured.
 """
 
+from datetime import datetime, timezone
+
 from private_internet.config import get_settings
 
 # Tier ordering. Higher rank includes everything below it.
@@ -59,24 +61,52 @@ def price_to_plan(price_id: str | None) -> str | None:
     return None
 
 
+def _coupon_grant_active(user: dict) -> bool:
+    """Whether the user holds an unexpired comp grant (coupon redemption).
+
+    ``plan_expires_at`` is set only by coupon grants (Stripe uses
+    ``subscription_current_period_end`` instead and never writes this column), so
+    a future value here means an active comp. Tolerates both ISO strings (the
+    serialized user dict) and datetime objects.
+    """
+    raw = user.get("plan_expires_at")
+    if not raw:
+        return False
+    expires = raw
+    if isinstance(raw, str):
+        try:
+            expires = datetime.fromisoformat(raw)
+        except ValueError:
+            return False
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires > datetime.now(timezone.utc)
+
+
 def effective_plan(user: dict) -> str:
     """The plan a user effectively has right now.
 
-    - billing disabled       -> "max" (everything open; current prod behaviour)
-    - admin                  -> "max"
-    - subscription not active -> "free" (even if users.plan says otherwise)
-    - else                   -> users.plan (default "free")
+    - billing disabled        -> "max" (everything open; current prod behaviour)
+    - admin                   -> "max"
+    - active coupon grant      -> users.plan (comped via a redeemed code)
+    - subscription not active  -> "free" (even if users.plan says otherwise)
+    - else                    -> users.plan (default "free")
     """
     settings = get_settings()
     if not settings.billing_enabled:
         return "max"
     if user.get("is_admin"):
         return "max"
+    plan = user.get("plan") or "free"
+    if plan not in PLAN_RANK:
+        plan = "free"
+    # A live coupon grant entitles the user regardless of any Stripe status.
+    if _coupon_grant_active(user):
+        return plan
     status = user.get("subscription_status") or "inactive"
     if status not in ENTITLED_STATUSES:
         return "free"
-    plan = user.get("plan") or "free"
-    return plan if plan in PLAN_RANK else "free"
+    return plan
 
 
 def has_feature(user: dict, feature: str) -> bool:

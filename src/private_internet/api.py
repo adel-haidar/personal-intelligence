@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI
 
 from private_internet.auth.oauth import bootstrap_oauth_user_binding, create_oauth_tables
 from private_internet.auth.routes import router as auth_router
+from private_internet.billing.coupons import init_coupons_db, seed_tester_coupons
 from private_internet.billing.routes import router as billing_router
 from private_internet.billing.service import require_feature
 from private_internet.brain.db import init_brain_db
@@ -115,6 +116,9 @@ async def lifespan(app: FastAPI):
     _bootstrap_step("migrate_saas", migrate_saas)
     # OAuth→user binding FK + backfill; needs the `users` table to exist (above).
     _bootstrap_step("bootstrap_oauth_user_binding", bootstrap_oauth_user_binding)
+    # Coupons/access codes depend on users existing; seed any TESTER_COUPONS after.
+    _bootstrap_step("init_coupons_db", init_coupons_db)
+    _bootstrap_step("seed_tester_coupons", seed_tester_coupons)
     # Brain Organiser columns/tables depend on the memories table existing.
     _bootstrap_step("init_brain_db", init_brain_db)
     # Non-fatal: warn (don't fail startup) if podcast voices are still placeholders.

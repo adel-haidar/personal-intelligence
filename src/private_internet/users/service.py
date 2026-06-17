@@ -203,6 +203,25 @@ def set_notification_prefs(user_id: str, prefs: dict) -> dict | None:
     return _serialize_user(row) if row else None
 
 
+def grant_plan(user_id: str, *, plan: str, expires_at: datetime) -> None:
+    """Comp a plan tier until ``expires_at`` without touching Stripe state.
+
+    Used by coupon redemption. Writes ``plan`` + ``plan_expires_at``; the coupon
+    path in billing/plans.py::effective_plan honours that expiry. Deliberately
+    leaves ``subscription_status`` ('inactive') and Stripe columns untouched so
+    the user is never shown the Billing Portal link.
+    """
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE users SET plan = %s, plan_expires_at = %s WHERE id = %s",
+        (plan, expires_at, user_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 def set_subscription(
     user_id: str,
     *,

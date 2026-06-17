@@ -12,11 +12,34 @@ import { PLANS, resolveFeature } from '../config/plans'
 
 const route = useRoute()
 const router = useRouter()
-const { status, fetchStatus, startCheckout, openPortal } = useBilling()
+const { status, fetchStatus, startCheckout, openPortal, redeemCoupon } = useBilling()
 
 const loading = ref<string | null>(null) // stores which plan key is loading
 const error = ref('')
 const canceled = computed(() => route.query.checkout === 'cancel')
+
+// ── Coupon / access code redemption (testers & early adopters) ──
+const couponCode = ref('')
+const couponLoading = ref(false)
+const couponError = ref('')
+const couponSuccess = ref('')
+
+async function redeem() {
+  const code = couponCode.value.trim()
+  if (!code || couponLoading.value) return
+  couponLoading.value = true
+  couponError.value = ''
+  couponSuccess.value = ''
+  try {
+    const plan = await redeemCoupon(code)
+    couponSuccess.value = `Code applied — you're on ${plan === 'max' ? 'Max' : plan} now. Taking you in…`
+    setTimeout(() => router.replace('/overview'), 900)
+  } catch (e) {
+    couponError.value = (e as Error).message
+  } finally {
+    couponLoading.value = false
+  }
+}
 
 // When the route guard (or a 402) sends the user here, ?feature=… tells us what
 // they were trying to reach so we can explain which plan unlocks it.
@@ -171,6 +194,36 @@ async function managePortal() {
             </template>
           </div>
         </PiCard>
+      </div>
+
+      <!-- Coupon / access code (testers & early adopters) -->
+      <div class="sub__coupon">
+        <p class="sub__coupon-label t-secondary">
+          Have a gift or early-adopter code? Enter it to unlock everything.
+        </p>
+        <form class="sub__coupon-row" @submit.prevent="redeem">
+          <input
+            v-model="couponCode"
+            type="text"
+            class="pi-input sub__coupon-input"
+            placeholder="Enter your code"
+            autocapitalize="characters"
+            autocomplete="off"
+            spellcheck="false"
+            :disabled="couponLoading"
+            aria-label="Access code"
+          />
+          <PiButton
+            type="submit"
+            variant="secondary"
+            :loading="couponLoading"
+            :disabled="!couponCode.trim() || couponLoading"
+          >
+            Redeem
+          </PiButton>
+        </form>
+        <p v-if="couponError" class="pi-field__error" role="alert" style="margin-top: var(--space-2);">{{ couponError }}</p>
+        <p v-if="couponSuccess" class="sub__coupon-success" role="status">{{ couponSuccess }}</p>
       </div>
 
       <!-- Manage billing link (visible once user has an active subscription) -->
@@ -352,6 +405,39 @@ async function managePortal() {
 
 .sub__cta-wrap {
   margin-top: auto;
+}
+
+.sub__coupon {
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border-subtle);
+  max-width: 460px;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
+}
+
+.sub__coupon-label {
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-3);
+}
+
+.sub__coupon-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.sub__coupon-input {
+  flex: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sub__coupon-success {
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--success);
 }
 
 .sub__portal-link {

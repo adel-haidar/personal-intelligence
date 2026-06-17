@@ -13,6 +13,7 @@ export interface BillingStatus {
   plan_rank: number
   plan_ranks: Record<string, number>
   feature_min_plan: Record<string, string>
+  plan_expires_at: string | null
 }
 
 // Module-level cache so the router guard doesn't refetch on every navigation.
@@ -92,12 +93,35 @@ async function openPortal(): Promise<void> {
   throw new Error(data.error || 'Could not open the billing portal.')
 }
 
+/**
+ * Redeem a tester / early-adopter code. On success the server has comped the
+ * user's plan; we refetch status so the rest of the app sees the new tier.
+ * Returns the granted plan (e.g. "max"). Throws on an invalid/used code.
+ */
+async function redeemCoupon(code: string): Promise<string> {
+  const token = await requireAuth()
+  const res = await fetch(`${API_BASE}/api/billing/redeem`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ code }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || 'Could not redeem that code.')
+  }
+  await fetchStatus(true)
+  return data.plan as string
+}
+
 function clearBillingStatus(): void {
   status.value = null
 }
 
 export function useBilling() {
-  return { status, fetchStatus, startCheckout, openPortal, clearBillingStatus, hasFeature, meetsPlan }
+  return { status, fetchStatus, startCheckout, openPortal, redeemCoupon, clearBillingStatus, hasFeature, meetsPlan }
 }
 
 export { fetchStatus, clearBillingStatus, hasFeature, meetsPlan }

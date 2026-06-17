@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from private_internet.billing import service, stripe_client
+from private_internet.billing import coupons, service, stripe_client
 from private_internet.billing.plans import (
     FEATURE_MIN_PLAN,
     PLAN_RANK,
@@ -45,7 +45,29 @@ async def status(ctx: RequestContext = Depends(get_request_context)):
         "trial_days": settings.stripe_trial_days,
         "price_configured": bool(settings.stripe_price_pro or settings.stripe_price_id),
         "current_period_end": user.get("subscription_current_period_end"),
+        # Set only for comp/coupon grants (drives the "Max until …" hint in the UI).
+        "plan_expires_at": user.get("plan_expires_at"),
     }
+
+
+class RedeemRequest(BaseModel):
+    code: str = ""
+
+
+@router.post("/redeem")
+async def redeem(
+    body: RedeemRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Redeem a tester / early-adopter code for a comped plan (no Stripe)."""
+    try:
+        grant = coupons.redeem_coupon(ctx.user_id, body.code)
+    except coupons.CouponError as e:
+        return _error(400, str(e))
+    except Exception as e:  # pragma: no cover - defensive
+        logger.error(f"{ctx.log_prefix} coupon redeem failed: {e}", exc_info=True)
+        return _error(500, "Could not redeem that code. Please try again.")
+    return {"ok": True, **grant}
 
 
 class CheckoutRequest(BaseModel):
