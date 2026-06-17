@@ -1,5 +1,12 @@
 export const de = {
   common: { save: 'Speichern', cancel: 'Abbrechen' },
+  health: {
+    sendToDoctor: 'Analyse an deinen Arzt senden',
+    sentToDoctorReady: 'E-Mail-Entwurf erstellt — deine Mail-App sollte sich mit dem angehängten Bericht öffnen. Falls nicht, öffne die heruntergeladene Datei.',
+    sendToDoctorError: 'Der Bericht konnte nicht vorbereitet werden. Bitte versuche es erneut.',
+    doctorEmailSubject: 'Mein KI-Gesundheitsanalysebericht',
+    doctorEmailBody: "Sehr geehrte/r Dr. [NAME IHRES ARZTES HIER],\n\nhiermit möchte ich Ihnen einen Bericht meiner KI-Gesundheitsanalyse zukommen lassen.\n\nMit freundlichen Grüßen,\n{name}",
+  },
   brainBanner: {
     message: 'Je mehr du deinem Gehirn hinzufügst, desto mehr spiegelt die nächste Welle an Inhalten deine Erinnerungen wider.',
     cta: 'Gehirn füttern →',

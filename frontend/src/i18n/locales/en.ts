@@ -1,5 +1,12 @@
 export const en = {
   common: { save: 'Save', cancel: 'Cancel' },
+  health: {
+    sendToDoctor: 'Send analysis to your doctor',
+    sentToDoctorReady: "Email draft created — your mail app should open with the report attached. If it doesn't, open the downloaded file.",
+    sendToDoctorError: "Couldn't prepare the report. Please try again.",
+    doctorEmailSubject: 'My AI Health Analysis Report',
+    doctorEmailBody: "Dear Dr. [YOUR DOCTOR'S NAME HERE],\n\nI hereby would like to send you a report of my AI health analysis.\n\nBest Regards,\n{name}",
+  },
   brainBanner: {
     message: 'The more you add to your brain, the more the next wave of content reflects your memories.',
     cta: 'Feed your brain →',

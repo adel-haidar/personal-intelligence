@@ -1,5 +1,12 @@
 export const fr = {
   common: { save: 'Enregistrer', cancel: 'Annuler' },
+  health: {
+    sendToDoctor: 'Envoyer l’analyse à votre médecin',
+    sentToDoctorReady: 'Brouillon créé — votre application de messagerie devrait s’ouvrir avec le rapport en pièce jointe. Sinon, ouvrez le fichier téléchargé.',
+    sendToDoctorError: 'Impossible de préparer le rapport. Veuillez réessayer.',
+    doctorEmailSubject: 'Mon rapport d’analyse de santé par IA',
+    doctorEmailBody: "Cher/Chère Dr. [NOM DE VOTRE MÉDECIN ICI],\n\nJe me permets de vous transmettre un rapport de mon analyse de santé par intelligence artificielle.\n\nCordialement,\n{name}",
+  },
   brainBanner: {
     message: 'Plus vous enrichissez votre cerveau, plus la prochaine vague de contenu reflétera vos souvenirs.',
     cta: 'Nourrir votre cerveau →',

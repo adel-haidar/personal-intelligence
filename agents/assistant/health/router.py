@@ -3,11 +3,12 @@ import logging
 import os
 import tempfile
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import boto3
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from functools import lru_cache
 
 from assistant.health.compute import _DEVICE_SOURCES, compute_daily_summary
@@ -338,3 +339,437 @@ async def get_summary(
     pool = await _pool()
     user_id = await _resolve_user_id(ident, pool)
     return await compute_daily_summary(pool, target_date, user_id=user_id)
+
+
+# ── PDF health report ─────────────────────────────────────────────────────────
+
+def _fmt_sleep(minutes: float | None) -> str:
+    """Format sleep duration in minutes as 'Xh Ym', e.g. '7h 30m'. Returns '—' if None."""
+    if minutes is None:
+        return "—"
+    h = int(minutes // 60)
+    m = int(round(minutes % 60))
+    return f"{h}h {m}m" if m else f"{h}h"
+
+
+def _fmt_optional(value: float | None, decimals: int = 1, suffix: str = "") -> str:
+    if value is None:
+        return "—"
+    return f"{value:.{decimals}f}{suffix}"
+
+
+# Human-readable wording for each flag — mirrors the frontend's numberLines switch.
+_FLAG_DESCRIPTIONS: dict[str, tuple[str, str]] = {
+    "low_hrv_3_days": (
+        "Watch",
+        "Heart-rate variability has been low for several days, which can signal "
+        "fatigue or stress. Lighter training and earlier nights are recommended.",
+    ),
+    "sleep_below_target": (
+        "Watch",
+        "Sleep has been below target on recent nights. Recovery happens during "
+        "sleep — an earlier, more consistent bedtime is advised.",
+    ),
+    "resting_hr_elevated": (
+        "Watch",
+        "Resting heart rate is higher than usual, which often follows poor sleep "
+        "or added stress.",
+    ),
+    "weight_loss_too_fast": (
+        "Attention",
+        "Weight is decreasing rapidly. Rapid loss is hard to sustain and can "
+        "cost muscle mass — consider easing the calorie deficit.",
+    ),
+    "weight_plateau": (
+        "Steady",
+        "Weight has been stable recently. If a change is the goal, small "
+        "consistent adjustments work best.",
+    ),
+    "goal_reached": (
+        "Healthy",
+        "Weight goal has been reached. The focus now shifts to maintaining it.",
+    ),
+}
+
+
+def _build_pdf(
+    target_date: date,
+    summary: "DailyHealthSummary",
+    flags: list[str],
+    coach_insight: str,
+    analysis: str,
+    reasoning: str,
+    has_data: bool,
+) -> bytes:
+    """Construct a professional, doctor-facing PDF using reportlab platypus."""
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (
+        HRFlowable,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    # ── Colour palette (clinical, muted) ──────────────────────────────────────
+    DARK = colors.HexColor("#1A1A2E")
+    MID = colors.HexColor("#4A4A6A")
+    ACCENT = colors.HexColor("#4A5568")
+    LIGHT_BG = colors.HexColor("#F7F8FA")
+    RULE = colors.HexColor("#D1D5DB")
+    ZEBRA = colors.HexColor("#F0F2F5")
+    FLAG_WATCH = colors.HexColor("#92400E")       # amber-800
+    FLAG_ATTN = colors.HexColor("#991B1B")         # red-800
+    FLAG_GOOD = colors.HexColor("#065F46")         # emerald-800
+    FLAG_INFO = colors.HexColor("#1E3A5F")         # slate-800
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=2.2 * cm,
+        rightMargin=2.2 * cm,
+        topMargin=2.0 * cm,
+        bottomMargin=2.2 * cm,
+        title=f"Health Analysis Report — {target_date.isoformat()}",
+        author="Private Internet Health Assistant",
+    )
+
+    styles = getSampleStyleSheet()
+
+    # ── Custom paragraph styles ───────────────────────────────────────────────
+    style_title = ParagraphStyle(
+        "ReportTitle",
+        fontName="Helvetica-Bold",
+        fontSize=20,
+        leading=24,
+        textColor=DARK,
+        alignment=TA_LEFT,
+    )
+    style_subtitle = ParagraphStyle(
+        "ReportSubtitle",
+        fontName="Helvetica",
+        fontSize=10,
+        leading=14,
+        textColor=MID,
+        alignment=TA_LEFT,
+        spaceAfter=0,
+    )
+    style_section = ParagraphStyle(
+        "SectionHead",
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=15,
+        textColor=DARK,
+        spaceBefore=14,
+        spaceAfter=4,
+    )
+    style_body = ParagraphStyle(
+        "Body",
+        fontName="Helvetica",
+        fontSize=9.5,
+        leading=14,
+        textColor=DARK,
+        spaceAfter=6,
+    )
+    style_flag_label = ParagraphStyle(
+        "FlagLabel",
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=12,
+        textColor=FLAG_INFO,
+    )
+    style_flag_text = ParagraphStyle(
+        "FlagText",
+        fontName="Helvetica",
+        fontSize=9,
+        leading=13,
+        textColor=DARK,
+    )
+    style_footer = ParagraphStyle(
+        "Footer",
+        fontName="Helvetica-Oblique",
+        fontSize=8,
+        leading=11,
+        textColor=MID,
+        alignment=TA_CENTER,
+    )
+    style_disclaimer = ParagraphStyle(
+        "Disclaimer",
+        fontName="Helvetica-Oblique",
+        fontSize=8,
+        leading=11,
+        textColor=MID,
+        alignment=TA_CENTER,
+        spaceBefore=10,
+    )
+
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    story = []
+
+    # ── 1. Header ─────────────────────────────────────────────────────────────
+    story.append(Paragraph("Health Analysis Report", style_title))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(f"Report date: {target_date.isoformat()}", style_subtitle))
+    story.append(Paragraph(f"Generated: {generated_at}", style_subtitle))
+    story.append(Spacer(1, 8))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=ACCENT, spaceAfter=10))
+
+    if not has_data:
+        story.append(Paragraph("Key Metrics", style_section))
+        story.append(
+            Paragraph(
+                f"No health data is available for {target_date.isoformat()}. "
+                "Upload an Apple Watch or Samsung Health export from the Private Internet "
+                "dashboard, then run the daily analysis to populate this report.",
+                style_body,
+            )
+        )
+    else:
+        # ── 2. Key metrics table ───────────────────────────────────────────────
+        story.append(Paragraph("Key Metrics", style_section))
+
+        # Weight trend cell — build before the table
+        trend_val = summary.weight_trend_kg_per_week
+        if trend_val is not None:
+            direction = "▼" if trend_val < 0 else ("▲" if trend_val > 0 else "→")
+            trend_str = f"{direction} {abs(trend_val):.2f} kg/week"
+        else:
+            trend_str = "—"
+
+        progress_str = (
+            f"{summary.progress_to_goal_kg:+.1f} kg to goal (73.0 kg)"
+            if summary.progress_to_goal_kg is not None
+            else "—"
+        )
+
+        metrics_data = [
+            ["Metric", "Value"],
+            ["Steps", _fmt_optional(summary.steps, decimals=0) if summary.steps is not None else "—"],
+            ["Resting heart rate", _fmt_optional(summary.resting_hr, decimals=0, suffix=" bpm")],
+            ["Sleep duration", _fmt_sleep(summary.sleep_duration_min)],
+            ["Weight", _fmt_optional(summary.weight_kg, decimals=1, suffix=" kg")],
+            ["HRV", _fmt_optional(summary.hrv_ms, decimals=0, suffix=" ms")],
+            ["Active energy", _fmt_optional(summary.active_energy_kcal, decimals=0, suffix=" kcal")],
+            ["Body fat", _fmt_optional(summary.body_fat_percent, decimals=1, suffix=" %")],
+            ["Weight trend", trend_str],
+            ["Progress to goal", progress_str],
+        ]
+
+        col_w = [doc.width * 0.55, doc.width * 0.45]
+        tbl = Table(metrics_data, colWidths=col_w)
+        tbl.setStyle(
+            TableStyle(
+                [
+                    # Header row
+                    ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+                    ("TOPPADDING", (0, 0), (-1, 0), 6),
+                    # Zebra rows
+                    *[
+                        ("BACKGROUND", (0, r), (-1, r), ZEBRA)
+                        for r in range(2, len(metrics_data), 2)
+                    ],
+                    # Data rows
+                    ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+                    ("FONTNAME", (1, 1), (1, -1), "Helvetica"),
+                    ("FONTSIZE", (0, 1), (-1, -1), 9),
+                    ("TOPPADDING", (0, 1), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 1), (-1, -1), 5),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TEXTCOLOR", (0, 1), (0, -1), DARK),
+                    ("TEXTCOLOR", (1, 1), (1, -1), MID),
+                    # Outer border
+                    ("BOX", (0, 0), (-1, -1), 0.75, RULE),
+                    ("LINEBELOW", (0, 0), (-1, 0), 0.75, RULE),
+                    # Subtle inner row lines
+                    ("LINEBELOW", (0, 1), (-1, -2), 0.25, RULE),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ]
+            )
+        )
+        story.append(tbl)
+
+        # ── 3. Flags / observations ────────────────────────────────────────────
+        story.append(Paragraph("Observations", style_section))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=RULE, spaceAfter=6))
+
+        flag_rows = []
+        for f in flags:
+            if f in _FLAG_DESCRIPTIONS:
+                label, text = _FLAG_DESCRIPTIONS[f]
+                if label == "Watch":
+                    label_color = FLAG_WATCH
+                elif label == "Attention":
+                    label_color = FLAG_ATTN
+                elif label == "Healthy":
+                    label_color = FLAG_GOOD
+                else:
+                    label_color = FLAG_INFO
+            else:
+                label = "Note"
+                text = f.replace("_", " ").capitalize()
+                label_color = FLAG_INFO
+
+            label_style = ParagraphStyle(
+                f"FL_{f}",
+                parent=style_flag_label,
+                textColor=label_color,
+            )
+            flag_rows.append(
+                [
+                    Paragraph(label, label_style),
+                    Paragraph(text, style_flag_text),
+                ]
+            )
+
+        if flag_rows:
+            flag_tbl = Table(
+                flag_rows,
+                colWidths=[doc.width * 0.14, doc.width * 0.86],
+            )
+            flag_tbl.setStyle(
+                TableStyle(
+                    [
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("TOPPADDING", (0, 0), (-1, -1), 4),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                        ("LINEBELOW", (0, 0), (-1, -2), 0.25, RULE),
+                    ]
+                )
+            )
+            story.append(flag_tbl)
+        else:
+            story.append(
+                Paragraph(
+                    "No specific observations flagged for this date. All recent metrics appear within normal range.",
+                    style_body,
+                )
+            )
+
+        # ── 4. Summary / coach insight ─────────────────────────────────────────
+        if coach_insight or analysis or reasoning:
+            story.append(Paragraph("Summary", style_section))
+            story.append(HRFlowable(width="100%", thickness=0.5, color=RULE, spaceAfter=6))
+
+        if coach_insight:
+            story.append(Paragraph("<b>Coach insight</b>", style_body))
+            story.append(Paragraph(coach_insight, style_body))
+
+        if analysis:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("<b>Analysis</b>", style_body))
+            story.append(Paragraph(analysis, style_body))
+
+        if reasoning:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("<b>Clinical reasoning</b>", style_body))
+            story.append(Paragraph(reasoning, style_body))
+
+    # ── 5. Footer ─────────────────────────────────────────────────────────────
+    story.append(Spacer(1, 16))
+    story.append(HRFlowable(width="100%", thickness=0.75, color=RULE, spaceAfter=8))
+    story.append(
+        Paragraph(
+            "This report was generated by an AI health assistant (Private Internet) "
+            "and is intended to support, not replace, professional medical judgment. "
+            "Always consult a qualified healthcare professional before acting on this information.",
+            style_disclaimer,
+        )
+    )
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+@router.get("/health/report/{target_date}")
+async def health_report(
+    target_date: date,
+    ident: dict = Depends(require_user),
+):
+    """Return a professional PDF health report for `target_date`, suitable for sharing
+    with a medical professional. Pulls stored MCP analysis (if available) and
+    on-demand computed summary + trends — no new LLM calls are made.
+    # MUST SCOPE BY USER"""
+    settings = get_settings()
+    pool = await _pool()
+    user_id = await _resolve_user_id(ident, pool)
+
+    # Fetch stored LLM analysis from MCP memory (same pattern as get_daily).
+    stored: "HealthInsightResponse | None" = None
+    if settings.mcp_memory_url:
+        try:
+            stored = await fetch_from_mcp_memory(
+                target_date, settings.mcp_memory_url, ident["token"]
+            )
+        except Exception:
+            logger.warning("PDF report: could not fetch MCP memory for %s", target_date, exc_info=True)
+
+    # Compute on-demand summary (needed even when stored analysis exists, to fill
+    # any gaps and provide accurate current-day metrics).
+    try:
+        summary = await compute_daily_summary(pool, target_date, user_id=user_id)
+    except Exception:
+        logger.warning("PDF report: compute_daily_summary failed for %s", target_date, exc_info=True)
+        summary = DailyHealthSummary(date=target_date)
+
+    # Pull 30-day trends so the report has context even if no stored LLM run exists.
+    try:
+        await fetch_trends(pool, TREND_METRICS, 30, until=target_date, user_id=user_id)
+    except Exception:
+        logger.warning("PDF report: fetch_trends failed for %s", target_date, exc_info=True)
+
+    # Merge: if a stored result exists, prefer its summary fields and flags.
+    if stored and stored.status == "ok":
+        # Use the stored summary where it has richer data (e.g. flags + insight text)
+        # but fall back to the on-demand summary for any missing metric values.
+        merged = stored.summary
+        # Backfill nulls in stored summary from live compute
+        for field in DailyHealthSummary.model_fields:
+            if getattr(merged, field) is None and getattr(summary, field) is not None:
+                object.__setattr__(merged, field, getattr(summary, field))
+        flags = stored.flags
+        coach_insight = stored.coach_insight
+        analysis = stored.analysis
+        reasoning = stored.reasoning
+        has_data = True
+    else:
+        merged = summary
+        flags = []
+        coach_insight = ""
+        analysis = ""
+        reasoning = ""
+        # "has data" if any metric is non-null
+        has_data = any(
+            getattr(summary, f) is not None
+            for f in DailyHealthSummary.model_fields
+            if f != "date"
+        )
+
+    pdf_bytes = _build_pdf(
+        target_date=target_date,
+        summary=merged,
+        flags=flags,
+        coach_insight=coach_insight,
+        analysis=analysis,
+        reasoning=reasoning,
+        has_data=has_data,
+    )
+
+    filename = f"health-report-{target_date.isoformat()}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

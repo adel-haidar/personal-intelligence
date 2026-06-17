@@ -19,6 +19,7 @@ dependencies = [
     "lingua-language-detector>=2.0.0",
     "pydub>=0.25",
     "replicate>=1.0.0",
+    "reportlab>=4.0",
 ]
 
 [project.optional-dependencies]

@@ -1,5 +1,12 @@
 export const zh = {
   common: { save: '保存', cancel: '取消' },
+  health: {
+    sendToDoctor: '将分析发送给您的医生',
+    sentToDoctorReady: '邮件草稿已创建——您的邮件应用应会自动打开并附带报告。若未自动打开，请手动打开已下载的文件。',
+    sendToDoctorError: '无法准备报告，请重试。',
+    doctorEmailSubject: '我的 AI 健康分析报告',
+    doctorEmailBody: "尊敬的 [您的医生姓名] 医生，\n\n现随函附上我的 AI 健康分析报告，敬请查阅。\n\n此致，\n{name}",
+  },
   brainBanner: {
     message: '你向大脑添加的内容越多，下一波内容就越能反映你的记忆。',
     cta: '丰富你的大脑 →',

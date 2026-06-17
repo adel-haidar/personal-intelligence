@@ -23,6 +23,8 @@ import { useHealthDaily, useHealthTrends, useAppleHealthImport, useSamsungHealth
 import { requireAuth } from '../composables/useAuth'
 import { API_BASE } from '../config/env'
 import { useToast } from '../components/ui/useToast'
+import { useI18n } from '../i18n/index'
+import type { User } from '../types/user'
 
 Chart.register(
   LineElement, PointElement, LineController,
@@ -38,6 +40,7 @@ const { status: importStatus, error: importError, uploadFile } = useAppleHealthI
 const { status: samsungImportStatus, error: samsungImportError, uploadFile: uploadSamsungFile } = useSamsungHealthImport()
 const { data: healthStatus, fetchStatus } = useHealthStatus()
 const toast = useToast()
+const { t } = useI18n()
 
 const today = new Date().toISOString().slice(0, 10)
 // The date we currently show analysis for — moves to the latest imported day.
@@ -360,6 +363,138 @@ async function deleteAll() {
   } catch { toast('Deleting health data isn’t available yet.', 'error') }
 }
 
+// ── Send analysis to doctor ──────────────────────────────────────────────────
+const sendingToDoctor = ref(false)
+
+/** UTF-8-safe btoa: encodes a JS string (any Unicode) to base64. */
+function utf8ToBase64(str: string): string {
+  return btoa(unescape(encodeURIComponent(str)))
+}
+
+/** Wrap a flat base64 string into 76-char CRLF-terminated lines (RFC 2045). */
+function wrapBase64(b64: string): string {
+  const lines: string[] = []
+  for (let i = 0; i < b64.length; i += 76) {
+    lines.push(b64.slice(i, i + 76))
+  }
+  return lines.join('\r\n')
+}
+
+/** Read a Blob as a raw base64 string (no data-URL prefix). */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result as string
+      // Strip "data:<mime>;base64," prefix
+      const base64 = result.split(',')[1] ?? ''
+      resolve(base64)
+    }
+    reader.onerror = () => reject(new Error('FileReader error'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+interface BuildEmlOptions {
+  subject: string
+  body: string
+  pdfBase64: string
+  pdfFilename: string
+}
+
+/** Build a standards-compliant multipart/mixed .eml string. */
+function buildEml({ subject, body, pdfBase64, pdfFilename }: BuildEmlOptions): string {
+  const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2)}`
+  const CRLF = '\r\n'
+
+  // RFC 2047 encoded-word for the Subject (handles all Unicode locales)
+  const subjectEncoded = `=?UTF-8?B?${utf8ToBase64(subject)}?=`
+
+  // Body encoded as UTF-8 base64 (handles non-Latin1 characters safely)
+  const bodyB64 = wrapBase64(utf8ToBase64(body))
+
+  // PDF base64 wrapped at 76 chars
+  const pdfB64Wrapped = wrapBase64(pdfBase64)
+
+  return [
+    `To: `,
+    `Subject: ${subjectEncoded}`,
+    `X-Unsent: 1`,
+    `MIME-Version: 1.0`,
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    ``,
+    `--${boundary}`,
+    `Content-Type: text/plain; charset="UTF-8"`,
+    `Content-Transfer-Encoding: base64`,
+    ``,
+    bodyB64,
+    ``,
+    `--${boundary}`,
+    `Content-Type: application/pdf; name="${pdfFilename}"`,
+    `Content-Transfer-Encoding: base64`,
+    `Content-Disposition: attachment; filename="${pdfFilename}"`,
+    ``,
+    pdfB64Wrapped,
+    ``,
+    `--${boundary}--`,
+  ].join(CRLF)
+}
+
+async function sendToDoctor() {
+  sendingToDoctor.value = true
+  try {
+    // Fetch bearer token
+    const token = await requireAuth()
+
+    // Fetch display_name from /api/auth/me
+    let displayName = ''
+    try {
+      const meRes = await fetch(`${API_BASE}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (meRes.ok) {
+        const me = await meRes.json() as User
+        displayName = me.display_name ?? ''
+      }
+    } catch {
+      // Non-critical — fall back to empty string
+    }
+
+    // Fetch the PDF report
+    const res = await fetch(`${API_BASE}/api/health/report/${activeDate.value}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const pdfBlob = await res.blob()
+
+    // Convert PDF blob to raw base64
+    const pdfBase64 = await blobToBase64(pdfBlob)
+
+    // Build the .eml
+    const pdfFilename = `health-report-${activeDate.value}.pdf`
+    const subject = t('health.doctorEmailSubject')
+    const body = t('health.doctorEmailBody', { name: displayName || '—' })
+    const eml = buildEml({ subject, body, pdfBase64, pdfFilename })
+
+    // Trigger download — the browser associates .eml with the default mail client
+    const emlBlob = new Blob([eml], { type: 'message/rfc822' })
+    const url = URL.createObjectURL(emlBlob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `health-report-${activeDate.value}.eml`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+
+    toast(t('health.sentToDoctorReady'), 'success')
+  } catch {
+    toast(t('health.sendToDoctorError'), 'error')
+  } finally {
+    sendingToDoctor.value = false
+  }
+}
+
 onMounted(async () => {
   // Resolve the persistent sync state first, then load the LATEST stored analysis
   // and an anchored trend window — not just "today" — so a previously synced device
@@ -508,6 +643,13 @@ onMounted(async () => {
         <div style="display: flex; gap: var(--space-3); flex-wrap: wrap;">
           <PiButton variant="ghost" icon="plus" @click="pickFile">Upload more data</PiButton>
           <PiButton variant="ghost" @click="updateAnalysis">Update analysis</PiButton>
+          <PiButton
+            variant="primary"
+            icon="email"
+            :loading="sendingToDoctor"
+            :disabled="sendingToDoctor"
+            @click="sendToDoctor"
+          >{{ sendingToDoctor ? 'Preparing…' : t('health.sendToDoctor') }}</PiButton>
         </div>
         <PiButton variant="danger" icon="trash" @click="confirmDel = true">Delete all health data</PiButton>
       </div>
