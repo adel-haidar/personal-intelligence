@@ -454,6 +454,13 @@ class VideoImageGenerator(PostImageGenerator):
         except Exception as exc:
             logger.warning(
                 f"Thumbnail generation failed ({type(exc).__name__}); "
-                "using gradient fallback slide."
+                "rendering designed fallback cover."
             )
-            return _fallback_slide(VIDEO_WIDTH, VIDEO_HEIGHT, script.title, creator.get("name", ""))
+            from private_internet.content.cover_art import render_cover
+            return render_cover(
+                VIDEO_WIDTH, VIDEO_HEIGHT,
+                title=script.title,
+                kicker="SIGNAL",
+                subtitle=creator.get("name", ""),
+                seed=script.title,
+            )

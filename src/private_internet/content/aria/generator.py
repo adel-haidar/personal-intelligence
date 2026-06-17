@@ -41,7 +41,7 @@ from private_internet.content.aria.db import (
 from private_internet.content.aria.suno_client import SunoClient
 from private_internet.content.aria.waveform import compute_waveform
 from private_internet.content.asset_store import AssetStore
-from private_internet.content.fal_image import generate_image
+from private_internet.content.cover_art import generate_cover
 from private_internet.content.llm import bedrock_text_region
 from private_internet.database import _connect
 
@@ -407,24 +407,28 @@ async def generate_track(*, user_id: str) -> str:
         )
         logger.info("[user:%s] ARIA: waveform computed (%d bars)", user_id[:8], len(bars))
 
-        # 5. Album art via fal.ai (async HTTP).
-        art_bytes: Optional[bytes] = None
+        # 5. Album art via the resilient cover generator (fal.ai FLUX with a
+        #    designed local fallback) — every track always gets cover art, even
+        #    when the fal balance is unfunded.
         art_prompt = metadata.get(
             "art_prompt",
             f"abstract album art, {metadata['mood']} mood, {metadata.get('genre','ambient')}, no text",
         )
-        try:
-            art_bytes = await generate_image(art_prompt, width=1024, height=1024)
-            logger.info("[user:%s] ARIA: album art generated", user_id[:8])
-        except Exception as art_err:
-            logger.warning("[user:%s] ARIA: art generation failed (%s) — skipping", user_id[:8], art_err)
+        art_bytes = await generate_cover(
+            art_prompt,
+            width=1024,
+            height=1024,
+            fallback_title=metadata.get("title", "Untitled"),
+            kicker="ARIA",
+            fallback_subtitle=str(metadata.get("mood", "")).capitalize(),
+            seed=track_id,
+        )
+        logger.info("[user:%s] ARIA: album art ready (%d bytes)", user_id[:8], len(art_bytes))
 
         # 6. Upload to S3.
         audio_cdn = _upload_aria_audio(store, audio_bytes, track_id)
         waveform_cdn = _upload_aria_waveform(store, bars, track_id)
-        art_cdn: Optional[str] = None
-        if art_bytes:
-            art_cdn = _upload_aria_art(store, art_bytes, track_id)
+        art_cdn = _upload_aria_art(store, art_bytes, track_id)
 
         audio_key = _s3_key_from_cdn(audio_cdn, store)
         waveform_key = _s3_key_from_cdn(waveform_cdn, store)

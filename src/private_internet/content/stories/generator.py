@@ -55,27 +55,26 @@ STORIES_DURATION_TARGETS = {
 async def _generate_poster(title: str, premise: Optional[str]) -> bytes:
     """Generate a 2:3 portrait poster via fal FLUX.
 
-    Falls back to a simple gradient poster on any failure so the film row can
-    still be marked 'ready'.
+    Falls back to a designed on-brand portrait cover on any failure so the film
+    row can still be marked 'ready' with a real poster.
     """
-    from private_internet.content.fal_image import generate_image
-    from private_internet.content.video_generator import _fallback_slide
+    from private_internet.content.cover_art import generate_cover
 
     prompt = (
         f"Cinematic movie poster for '{title}'. "
         f"{(premise or '')[:120]} "
         "Dark, moody, editorial photography style. Portrait orientation. No text."
     )
-    try:
-        return await generate_image(
-            prompt,
-            width=_POSTER_WIDTH,
-            height=_POSTER_HEIGHT,
-            negative_text="text, watermark, logo, blurry, low quality",
-        )
-    except Exception as exc:
-        logger.warning("Poster generation failed (%s); using gradient fallback.", exc)
-        return _fallback_slide(_POSTER_WIDTH, _POSTER_HEIGHT, title)
+    # generate_cover never raises: fal FLUX with a designed portrait fallback.
+    return await generate_cover(
+        prompt,
+        width=_POSTER_WIDTH,
+        height=_POSTER_HEIGHT,
+        fallback_title=title,
+        kicker="STORIES",
+        fallback_subtitle=(premise or "")[:60],
+        seed=title,
+    )
 
 
 async def generate_film(

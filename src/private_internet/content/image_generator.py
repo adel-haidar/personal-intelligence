@@ -27,11 +27,25 @@ class PostImageGenerator:
         post_body: str,
     ) -> Tuple[bytes, str]:
         """
-        Generate an image for a post: Haiku writes the image prompt,
-        Nova Canvas renders it. Returns (image_bytes, image_prompt).
+        Generate an image for a post: Haiku writes the image prompt, then the
+        resilient cover generator renders it. Returns (image_bytes, image_prompt).
+
+        Uses ``cover_art.generate_cover`` so a post ALWAYS gets an image — when
+        fal.ai is unreachable/unfunded it renders a designed on-brand fallback
+        rather than leaving ``image_url`` NULL.
         """
+        from private_internet.content.cover_art import generate_cover
+
         image_prompt = await self._generate_image_prompt(topic, creator, post_body)
-        image_bytes = await self._generate_image(image_prompt)
+        image_bytes = await generate_cover(
+            image_prompt,
+            1024,
+            1024,
+            fallback_title=topic.get("name", ""),
+            kicker="PULSE",
+            fallback_subtitle=creator.get("name", ""),
+            seed=str(topic.get("id") or topic.get("name", "")),
+        )
         return image_bytes, image_prompt
 
     async def _generate_image_prompt(self, topic: dict, creator: dict, post_body: str) -> str:

@@ -278,6 +278,10 @@ class TestPostImageGenerator:
             new=AsyncMock(return_value=("A dark editorial photo of the Alps.", {})),
         ), patch("private_internet.content.image_generator.boto3") as mock_boto3, patch(
             "private_internet.content.image_generator.get_settings", return_value=_BEDROCK
+        ), patch(
+            # generate_for_post delegates to cover_art.generate_cover, which reads
+            # its own get_settings to pick the backend.
+            "private_internet.content.cover_art.get_settings", return_value=_BEDROCK
         ):
             mock_boto3.client.return_value = mock_client
             generator = PostImageGenerator()
@@ -292,7 +296,13 @@ class TestPostImageGenerator:
         assert request["imageGenerationConfig"]["quality"] == "standard"
 
     @pytest.mark.anyio
-    async def test_raises_when_no_images_returned(self):
+    async def test_falls_back_to_designed_cover_when_backend_fails(self):
+        """When the image backend yields nothing (e.g. unfunded fal balance),
+        generate_for_post must NOT raise — it returns a designed local cover so
+        the post is never left without an image."""
+        from io import BytesIO
+        from PIL import Image
+
         mock_client = MagicMock()
         mock_body = MagicMock()
         mock_body.read.return_value = json.dumps({"images": [], "error": "blocked"}).encode()
@@ -303,11 +313,19 @@ class TestPostImageGenerator:
             new=AsyncMock(return_value=("prompt", {})),
         ), patch("private_internet.content.image_generator.boto3") as mock_boto3, patch(
             "private_internet.content.image_generator.get_settings", return_value=_BEDROCK
+        ), patch(
+            "private_internet.content.cover_art.get_settings", return_value=_BEDROCK
         ):
             mock_boto3.client.return_value = mock_client
             generator = PostImageGenerator()
-            with pytest.raises(RuntimeError):
-                await generator.generate_for_post(_topic(), _creator(), "body")
+            image_bytes, image_prompt = await generator.generate_for_post(
+                _topic(), _creator(), "body"
+            )
+
+        # A real, valid PNG fallback — never empty, never a raise.
+        assert image_bytes
+        assert Image.open(BytesIO(image_bytes)).size == (1024, 1024)
+        assert image_prompt == "prompt"
 
 
 # ── AssetStore ─────────────────────────────────────────────────
