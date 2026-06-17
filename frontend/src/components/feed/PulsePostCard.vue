@@ -7,6 +7,7 @@ import SeededAvatar from './SeededAvatar.vue'
 import TonePill from './TonePill.vue'
 import ScoreText from './ScoreText.vue'
 import FeedVoteButton from './FeedVoteButton.vue'
+import { ShareButton } from '../ui'
 import { seededThumb } from './seeded'
 import { headline, readMinutes, postFormat, age, toneTint, firstUrl, linkHost } from './post-format'
 
@@ -48,6 +49,7 @@ const url = computed(() => firstUrl(props.post.body))
       <button class="pc__icon" :class="{ on: vote === 'down' }" style="--c: var(--danger)" @click.stop="emit('vote', false)" aria-label="Dislike">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
       </button>
+      <ShareButton variant="icon" kind="pulse_post" :ref-id="post.id" :text="`${post.creator_name} on Pulse`" @click.stop />
     </div>
   </div>
 
@@ -104,6 +106,7 @@ const url = computed(() => firstUrl(props.post.body))
       <FeedVoteButton label="Like" color="var(--success)" icon="up" :active="vote === 'up'" @click="emit('vote', true)" />
       <FeedVoteButton label="Dislike" color="var(--danger)" icon="down" :active="vote === 'down'" @click="emit('vote', false)" />
       <FeedVoteButton :label="fmt === 'C' ? 'Open source' : 'Open'" color="var(--accent-primary)" icon="open" @click="emit('open')" />
+      <ShareButton kind="pulse_post" :ref-id="post.id" :text="`${post.creator_name} on Pulse`" @click.stop />
       <span class="pc__read t-mono">{{ readMinutes(post.body) }} min read</span>
     </div>
   </div>

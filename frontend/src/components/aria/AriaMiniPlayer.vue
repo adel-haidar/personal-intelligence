@@ -5,6 +5,7 @@
  * module-scoped useAria() singleton so playback survives navigation.
  */
 import { useAria, arArtBackground, arFmt, AR_MOOD_COLOR } from '../../composables/useAria'
+import { ShareButton } from '../ui'
 
 const { track, playing, progress, remaining, isLiked, toggle, next, prev, toggleLike, openNow, seek, volume, setVolume } = useAria()
 
@@ -34,6 +35,13 @@ function onSeek(e: MouseEvent) {
       <button class="amp__icon" :class="{ 'amp__icon--liked': isLiked(track.id) }" aria-label="Like" @click="toggleLike(track.id)">
         <svg width="18" height="18" viewBox="0 0 24 24" :fill="isLiked(track.id) ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.8"><path d="M20.8 5.6a5.5 5.5 0 0 0-7.8 0L12 6.6l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
       </button>
+      <ShareButton
+        class="amp__share"
+        variant="icon"
+        :kind="track.kind === 'podcast' ? 'aria_podcast' : 'aria_track'"
+        :ref-id="track.id"
+        :text="track.title"
+      />
       <button class="amp__icon" aria-label="Previous" @click="prev">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14l-9-7z"/></svg>
       </button>

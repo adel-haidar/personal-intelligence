@@ -18,6 +18,7 @@ import {
 } from '../../composables/useStories'
 import StoryPoster from './StoryPoster.vue'
 import StorySection from './StorySection.vue'
+import { ShareButton } from '../ui'
 
 const props = defineProps<{
   id: string
@@ -144,6 +145,13 @@ async function toggleLike() {
           <svg width="16" height="16" viewBox="0 0 24 24" :fill="liked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.8"><path d="M20.8 5.6a5.5 5.5 0 0 0-7.8 0L12 6.6l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
           {{ liked ? 'Liked' : 'Like' }}
         </button>
+        <ShareButton
+          v-if="film.status === 'ready'"
+          class="st-share"
+          kind="stories_film"
+          :ref-id="film.id"
+          :text="film.title"
+        />
       </div>
     </div>
 

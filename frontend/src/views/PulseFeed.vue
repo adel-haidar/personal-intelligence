@@ -16,6 +16,7 @@ import ScoreText from '../components/feed/ScoreText.vue'
 import FeedVoteButton from '../components/feed/FeedVoteButton.vue'
 import PulsePostCard from '../components/feed/PulsePostCard.vue'
 import PulseReader from '../components/feed/PulseReader.vue'
+import { ShareButton } from '../components/ui'
 import PersonaRail from '../components/feed/PersonaRail.vue'
 import PersonaHeader from '../components/feed/PersonaHeader.vue'
 import { headline, readMinutes } from '../components/feed/post-format'
@@ -152,6 +153,7 @@ async function vote(post: Post, like: boolean) {
                 <FeedVoteButton :label="`${featured.score.toFixed(2)} Like`" color="var(--success)" icon="up" :active="votes[featured.id] === 'up'" @click="vote(featured, true)" />
                 <FeedVoteButton label="Dislike" color="var(--danger)" icon="down" :active="votes[featured.id] === 'down'" @click="vote(featured, false)" />
                 <FeedVoteButton label="Open" color="var(--accent-primary)" icon="open" @click="reading = featured" />
+                <ShareButton kind="pulse_post" :ref-id="featured.id" :text="`${featured.creator_name} on Pulse`" />
               </div>
             </div>
 

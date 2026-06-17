@@ -1,21 +1,26 @@
 <script setup lang="ts">
-/** Full-bleed SIGNAL player: native <video> engine with custom amber controls
- * (no native chrome), then title / chips / description / like-dislike / Sources
- * / "More like this". */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+/** Full-bleed SIGNAL player with a docked mini mode.
+ *
+ * Driven by the app-level useSignalPlayer() singleton and mounted once in
+ * App.vue, so playback persists across navigation. When `expanded` is false it
+ * collapses to a 64px bottom bar; the same <video> element stays mounted, so
+ * audio/video keep playing through the transition.
+ */
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Video } from '../../composables/useContent'
 import { logInteraction } from '../../composables/useContent'
+import { useSignalPlayer } from '../../composables/useSignalPlayer'
 import { useToast } from '../ui/useToast'
+import { ShareButton } from '../ui'
 import FeedChip from './FeedChip.vue'
 import ScoreText from './ScoreText.vue'
 import FeedVoteButton from './FeedVoteButton.vue'
 import SignalVideoCard from './SignalVideoCard.vue'
-import { ShareButton } from '../ui'
 import { seededHero } from './seeded'
 import { fmtSecs } from './video-util'
 
-const props = defineProps<{ video: Video; category: string; related: Video[] }>()
-const emit = defineEmits<{ (e: 'close'): void; (e: 'play', v: Video): void }>()
+const { current: video, related, category, expanded, play, minimize, expand, close } =
+  useSignalPlayer()
 
 const toast = useToast()
 const el = ref<HTMLVideoElement | null>(null)
@@ -26,13 +31,23 @@ let mq: MediaQueryList | undefined
 function syncWide() { wide.value = !!mq?.matches }
 const playing = ref(true)
 const cur = ref(0)
-const dur = ref(props.video.duration_seconds ?? 0)
+const dur = ref(0)
 const controls = ref(true)
 const showSources = ref(false)
 const vote = ref<'up' | 'down' | null>(null)
 let hideTimer: ReturnType<typeof setTimeout> | undefined
 
 const pct = computed(() => (dur.value > 0 ? (cur.value / dur.value) * 100 : 0))
+
+// Reset transient playback state whenever a new video starts.
+watch(video, (v) => {
+  cur.value = 0
+  dur.value = v?.duration_seconds ?? 0
+  vote.value = null
+  showSources.value = false
+  playing.value = true
+  controls.value = true
+})
 
 function poke() {
   controls.value = true
@@ -45,6 +60,8 @@ function toggle() {
   if (v.paused) v.play(); else v.pause() // @play / @pause update `playing`
   poke()
 }
+/** Tap on the stage: toggle when expanded, otherwise pop back to full-screen. */
+function onStage() { expanded.value ? toggle() : expand() }
 function skip(secs: number) { if (el.value) { el.value.currentTime = Math.max(0, el.value.currentTime + secs); poke() } }
 function seekBar(e: MouseEvent) {
   const v = el.value
@@ -57,9 +74,14 @@ function onMeta() { if (el.value && el.value.duration) dur.value = el.value.dura
 function setVolume(e: Event) { if (el.value) el.value.volume = Number((e.target as HTMLInputElement).value) / 100 }
 function fullscreen() { el.value?.requestFullscreen?.() }
 
+function playRelated(v: Video) {
+  play(v, { related: related.value.filter((r) => r.id !== v.id), category: category.value })
+}
+
 async function doVote(like: boolean) {
+  if (!video.value) return
   vote.value = like ? 'up' : 'down'
-  try { await logInteraction(props.video.id, 'video', like ? 'like' : 'dislike'); toast('Feedback saved') } catch { /* best-effort */ }
+  try { await logInteraction(video.value.id, 'video', like ? 'like' : 'dislike'); toast('Feedback saved') } catch { /* best-effort */ }
 }
 
 onMounted(() => {
@@ -75,10 +97,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="sp">
+  <div v-if="video" class="sp" :class="{ 'sp--mini': !expanded }">
     <div class="sp__scroll">
       <!-- player -->
-      <div class="sp__stage" @mousemove="poke" @click="toggle">
+      <div class="sp__stage" @mousemove="expanded && poke()" @click="onStage">
         <video
           ref="el"
           class="sp__video"
@@ -97,12 +119,15 @@ onBeforeUnmount(() => {
         </div>
 
         <transition name="sp-fade">
-          <div v-show="controls" class="sp__controls" @click.stop>
+          <div v-show="controls && expanded" class="sp__controls" @click.stop>
             <div class="sp__top">
-              <button class="sp__icon" aria-label="Exit" @click="emit('close')">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+              <button class="sp__icon" aria-label="Minimize" @click="minimize">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
               </button>
               <span class="sp__ttl">{{ video.title }}</span>
+              <button class="sp__icon sp__icon--close" aria-label="Close" @click="close">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
             </div>
             <div class="sp__center">
               <button class="sp__seek" aria-label="Back 10s" @click="skip(-10)"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4V1L8 5l4 4V6a6 6 0 1 1-6 6"/></svg></button>
@@ -126,31 +151,53 @@ onBeforeUnmount(() => {
         </transition>
       </div>
 
-      <!-- meta -->
-      <div class="sp__meta">
-        <h1 class="sp__h">{{ video.title }}</h1>
-        <div class="sp__chips">
-          <span class="sp__creator">{{ video.creator_name }}</span>
-          <FeedChip v-if="category" :label="category" :active="false" />
-          <ScoreText :score="video.score" />
+      <!-- mini-player control row (only when collapsed) -->
+      <div v-if="!expanded" class="sp__minibar">
+        <div class="sp__minimeta" @click="expand">
+          <span class="sp__minititle">{{ video.title }}</span>
+          <span class="sp__minisub">{{ category || video.creator_name }}</span>
         </div>
-        <p v-if="video.description" class="sp__desc">{{ video.description }}</p>
-        <div class="sp__actions">
-          <FeedVoteButton label="Like" color="var(--success)" icon="up" :active="vote === 'up'" @click="doVote(true)" />
-          <FeedVoteButton label="Dislike" color="var(--danger)" icon="down" :active="vote === 'down'" @click="doVote(false)" />
-          <ShareButton kind="signal_video" :ref-id="video.id" :text="video.title" />
-        </div>
-        <button class="sp__srctoggle" @click="showSources = !showSources">Sources {{ showSources ? '▴' : '▾' }}</button>
-        <p v-if="showSources" class="sp__srcnote">Sources aren't listed for this video yet.</p>
+        <button class="sp__miniicon" aria-label="Play/pause" @click="toggle">
+          <svg v-if="playing" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
+          <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <ShareButton variant="icon" kind="signal_video" :ref-id="video.id" :text="video.title" />
+        <button class="sp__miniicon" aria-label="Expand" @click="expand">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        </button>
+        <button class="sp__miniicon" aria-label="Close" @click="close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
       </div>
 
-      <!-- more like this -->
-      <div v-if="related.length" class="sp__more">
-        <div class="sp__morehd">More like this</div>
-        <div class="sp__morerow">
-          <SignalVideoCard v-for="r in related" :key="r.id" :video="r" :width="200" :fluid="wide" @play="emit('play', r)" />
+      <!-- full-screen-only sections -->
+      <template v-if="expanded">
+        <!-- meta -->
+        <div class="sp__meta">
+          <h1 class="sp__h">{{ video.title }}</h1>
+          <div class="sp__chips">
+            <span class="sp__creator">{{ video.creator_name }}</span>
+            <FeedChip v-if="category" :label="category" :active="false" />
+            <ScoreText :score="video.score" />
+          </div>
+          <p v-if="video.description" class="sp__desc">{{ video.description }}</p>
+          <div class="sp__actions">
+            <FeedVoteButton label="Like" color="var(--success)" icon="up" :active="vote === 'up'" @click="doVote(true)" />
+            <FeedVoteButton label="Dislike" color="var(--danger)" icon="down" :active="vote === 'down'" @click="doVote(false)" />
+            <ShareButton kind="signal_video" :ref-id="video.id" :text="video.title" />
+          </div>
+          <button class="sp__srctoggle" @click="showSources = !showSources">Sources {{ showSources ? '▴' : '▾' }}</button>
+          <p v-if="showSources" class="sp__srcnote">Sources aren't listed for this video yet.</p>
         </div>
-      </div>
+
+        <!-- more like this -->
+        <div v-if="related.length" class="sp__more">
+          <div class="sp__morehd">More like this</div>
+          <div class="sp__morerow">
+            <SignalVideoCard v-for="r in related" :key="r.id" :video="r" :width="200" :fluid="wide" @play="playRelated(r)" />
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -166,6 +213,7 @@ onBeforeUnmount(() => {
 .sp__controls > * { pointer-events: auto; }
 .sp__top { display: flex; align-items: center; gap: 12px; }
 .sp__icon { background: none; border: 0; color: #fff; cursor: pointer; display: flex; }
+.sp__icon--close { margin-left: auto; }
 .sp__ttl { font-family: var(--font-display); font-weight: 600; font-size: var(--text-sm); color: #fff; }
 .sp__center { display: flex; align-items: center; justify-content: center; gap: 36px; }
 .sp__seek { background: none; border: 0; color: #fff; cursor: pointer; display: flex; }
@@ -191,10 +239,29 @@ onBeforeUnmount(() => {
 .sp-fade-enter-active, .sp-fade-leave-active { transition: opacity 0.2s; }
 .sp-fade-enter-from, .sp-fade-leave-to { opacity: 0; }
 
+/* ── Docked mini-player ─────────────────────────────────────────────────────
+   A 64px bar pinned to the bottom of the content area. The <video> stays mounted
+   (just shrunk), so playback continues; only the chrome differs. */
+.sp--mini {
+  inset: auto; top: auto; left: var(--sidebar-w); right: 0; bottom: 0;
+  height: 64px; overflow: hidden; z-index: 130;
+  background: var(--background-surface); border-top: 1px solid var(--border-subtle);
+  animation: none;
+}
+.sp--mini .sp__scroll { max-width: none; margin: 0; display: flex; align-items: center; height: 64px; padding: 0; }
+.sp--mini .sp__stage { flex: 0 0 auto; width: 114px; height: 64px; aspect-ratio: auto; border-radius: 0; }
+.sp--mini .sp__video { height: 64px; }
+.sp__minibar { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 0 12px; }
+.sp__minimeta { min-width: 0; flex: 1; cursor: pointer; }
+.sp__minititle { display: block; font-family: var(--font-display); font-weight: 500; font-size: 14px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp__minisub { display: block; font-size: 12px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp__miniicon { background: none; border: 0; color: var(--text-secondary); cursor: pointer; display: flex; padding: 6px; border-radius: 999px; }
+.sp__miniicon:hover { color: var(--text-primary); background: var(--background-elevated, rgba(255,255,255,.05)); }
+
 /* Wide viewports: video + meta on the left, "More like this" as a vertical rail
    on the right — using the side and bottom space a single row would waste. */
 @media (min-width: 1024px) {
-  .sp__scroll {
+  .sp:not(.sp--mini) .sp__scroll {
     max-width: 1500px;
     display: grid;
     grid-template-columns: minmax(0, 1fr) clamp(300px, 26vw, 400px);
@@ -203,10 +270,10 @@ onBeforeUnmount(() => {
     column-gap: 32px;
     padding: 24px 24px 56px;
   }
-  .sp__stage { grid-area: stage; border-radius: var(--radius-md); overflow: hidden; }
-  .sp__meta { grid-area: meta; padding: 20px 0 0; }
-  .sp__more { grid-area: rail; padding: 0; }
-  .sp__morehd { margin-top: 0; }
-  .sp__morerow { flex-direction: column; overflow: visible; gap: 14px; padding-bottom: 0; }
+  .sp:not(.sp--mini) .sp__stage { grid-area: stage; border-radius: var(--radius-md); overflow: hidden; }
+  .sp:not(.sp--mini) .sp__meta { grid-area: meta; padding: 20px 0 0; }
+  .sp:not(.sp--mini) .sp__more { grid-area: rail; padding: 0; }
+  .sp:not(.sp--mini) .sp__morehd { margin-top: 0; }
+  .sp:not(.sp--mini) .sp__morerow { flex-direction: column; overflow: visible; gap: 14px; padding-bottom: 0; }
 }
 </style>

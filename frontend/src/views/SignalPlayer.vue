@@ -11,15 +11,15 @@ import FeaturedCard from '../components/feed/FeaturedCard.vue'
 import SignalSection from '../components/feed/SignalSection.vue'
 import SignalVideoCard from '../components/feed/SignalVideoCard.vue'
 import SignalSearch from '../components/feed/SignalSearch.vue'
-import SignalPlayerOverlay from '../components/feed/SignalPlayerOverlay.vue'
 import { fmtSecs, isPlayable, isProcessing } from '../components/feed/video-util'
+import { useSignalPlayer } from '../composables/useSignalPlayer'
 import BrainBanner from '../components/BrainBanner.vue'
 
 const { videos, loading, error, topicNames, loadMore } = useSignalLibrary()
+const { play: openPlayer } = useSignalPlayer()
 
 const cat = ref('All')
 const searching = ref(false)
-const playing = ref<Video | null>(null)
 
 onMounted(() => loadMore())
 
@@ -52,7 +52,7 @@ const relatedFor = (v: Video) =>
   videos.value.filter((x) => x.id !== v.id && isPlayable(x) && catOf(x) === catOf(v)).slice(0, 8)
 
 function play(v: Video) {
-  if (!isProcessing(v)) playing.value = v
+  if (!isProcessing(v)) openPlayer(v, { related: relatedFor(v), category: catOf(v) })
 }
 </script>
 
@@ -124,15 +124,6 @@ function play(v: Video) {
         </SignalSection>
       </template>
     </template>
-
-    <SignalPlayerOverlay
-      v-if="playing"
-      :video="playing"
-      :category="catOf(playing)"
-      :related="relatedFor(playing)"
-      @close="playing = null"
-      @play="(v) => (playing = v)"
-    />
   </div>
 </template>
 

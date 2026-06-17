@@ -5,8 +5,10 @@ import Sidebar from './components/Sidebar.vue'
 import ToastProvider from './components/ui/ToastProvider.vue'
 import AriaMiniPlayer from './components/aria/AriaMiniPlayer.vue'
 import AriaNowPlaying from './components/aria/AriaNowPlaying.vue'
+import SignalPlayerOverlay from './components/feed/SignalPlayerOverlay.vue'
 import { isAuthenticated, hasRefreshToken, refreshTokens, requireAuth } from './composables/useAuth'
 import { useAria } from './composables/useAria'
+import { useSignalPlayer } from './composables/useSignalPlayer'
 import { useI18n } from './i18n'
 import { API_BASE } from './config/env'
 
@@ -15,6 +17,10 @@ const { setLocale } = useI18n()
 // App-level music state: the mini-player persists across navigation, so it lives
 // here in the shell (above the router), never inside a page component.
 const { track: ariaTrack } = useAria()
+// SIGNAL playback is also app-level: the player persists across navigation and
+// docks to a bottom mini-bar when collapsed. Reserve space for that bar too.
+const { current: signalVideo, expanded: signalExpanded } = useSignalPlayer()
+const signalMini = computed(() => !!signalVideo.value && !signalExpanded.value)
 
 // Apply the account's saved language so the choice follows the user across
 // devices (localStorage already gave an instant, flash-free default on load).
@@ -50,7 +56,7 @@ onMounted(async () => {
     <!-- Authenticated shell: sidebar + scrollable content -->
     <div v-else class="pi-shell">
       <Sidebar />
-      <main class="pi-main" :class="{ 'pi-main--mini': ariaTrack }">
+      <main class="pi-main" :class="{ 'pi-main--mini': ariaTrack || signalMini }">
         <div class="pi-main__inner">
           <RouterView />
         </div>
@@ -58,6 +64,8 @@ onMounted(async () => {
       <!-- ARIA: persistent mini-player + full Now Playing overlay (app-level). -->
       <AriaMiniPlayer />
       <AriaNowPlaying />
+      <!-- SIGNAL: persistent full-screen / docked mini video player (app-level). -->
+      <SignalPlayerOverlay />
     </div>
   </ToastProvider>
 </template>

@@ -6,6 +6,7 @@ import SeededAvatar from './SeededAvatar.vue'
 import TonePill from './TonePill.vue'
 import ScoreText from './ScoreText.vue'
 import FeedVoteButton from './FeedVoteButton.vue'
+import { ShareButton } from '../ui'
 import { seededThumb } from './seeded'
 import { headline, readMinutes, age, firstUrl, linkHost } from './post-format'
 
@@ -56,6 +57,7 @@ const handle = props.post.creator_slug || props.post.creator_name.toLowerCase().
     <div class="rd__bar">
       <FeedVoteButton label="Like" color="var(--success)" icon="up" :active="v === 'up'" @click="doVote(true)" />
       <FeedVoteButton label="Dislike" color="var(--danger)" icon="down" :active="v === 'down'" @click="doVote(false)" />
+      <ShareButton kind="pulse_post" :ref-id="post.id" :text="`${post.creator_name} on Pulse`" />
     </div>
   </div>
 </template>
