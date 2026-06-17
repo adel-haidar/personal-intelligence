@@ -47,6 +47,93 @@ def init_aria_db() -> None:
     finally:
         cur.close()
         conn.close()
+    # Self-heal duplicate auto-generated playlists + install the guard index
+    # (mirrors migrations/0019_aria_playlist_dedupe.sql). Own transaction so a
+    # failure here cannot roll back the DDL above.
+    dedupe_auto_playlists()
+
+
+def dedupe_auto_playlists() -> None:
+    """Merge duplicate auto-generated playlists per (user_id, dominant_mood) and
+    install a NULLS-NOT-DISTINCT partial unique index to prevent recurrence.
+
+    Duplicates arose because auto-playlist ids were derived from the resolved
+    user_id (uuid5), which changed across runs when MCP/cron generation rebound
+    from the seed admin to the real platform user (migration 0016). Idempotent —
+    a no-op once the library is clean. # MUST SCOPE BY USER (per-user partitions)
+    """
+    conn = _connect()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """CREATE TEMP TABLE _aria_pl_dupes ON COMMIT DROP AS
+               SELECT id,
+                      FIRST_VALUE(id) OVER (
+                          PARTITION BY user_id, COALESCE(dominant_mood::text, '__brain__')
+                          ORDER BY created_at, id
+                      ) AS keep_id
+               FROM aria_playlists
+               WHERE is_auto_generated = TRUE"""
+        )
+        cur.execute(
+            """INSERT INTO aria_playlist_tracks (playlist_id, track_id, position)
+               SELECT d.keep_id, pt.track_id, pt.position
+               FROM aria_playlist_tracks pt
+               JOIN _aria_pl_dupes d ON d.id = pt.playlist_id
+               WHERE d.id <> d.keep_id
+               ON CONFLICT (playlist_id, track_id) DO NOTHING"""
+        )
+        cur.execute(
+            "DELETE FROM aria_playlist_tracks "
+            "WHERE playlist_id IN (SELECT id FROM _aria_pl_dupes WHERE id <> keep_id)"
+        )
+        cur.execute(
+            "DELETE FROM aria_playlists "
+            "WHERE id IN (SELECT id FROM _aria_pl_dupes WHERE id <> keep_id)"
+        )
+        cur.execute(
+            """UPDATE aria_playlists p
+               SET track_count    = COALESCE(sub.cnt, 0),
+                   total_duration = COALESCE(sub.dur, 0),
+                   updated_at     = now()
+               FROM (
+                   SELECT pt.playlist_id,
+                          COUNT(*)                             AS cnt,
+                          COALESCE(SUM(t.duration_seconds), 0) AS dur
+                   FROM aria_playlist_tracks pt
+                   JOIN aria_tracks t ON t.id = pt.track_id
+                   GROUP BY pt.playlist_id
+               ) sub
+               WHERE p.id = sub.playlist_id AND p.is_auto_generated = TRUE"""
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.exception("dedupe_auto_playlists: merge step failed")
+    finally:
+        cur.close()
+        conn.close()
+    # The guard index in a separate transaction: NULLS NOT DISTINCT requires
+    # PostgreSQL 15+, so isolate it — on an older engine the merge above still
+    # persists and we just skip the index.
+    conn = _connect()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_aria_playlists_auto_natural
+               ON aria_playlists (user_id, dominant_mood) NULLS NOT DISTINCT
+               WHERE is_auto_generated"""
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.warning(
+            "dedupe_auto_playlists: could not create guard index "
+            "(needs PostgreSQL 15+); duplicates were still merged"
+        )
+    finally:
+        cur.close()
+        conn.close()
 
 
 def _apply_inline_ddl(cur) -> None:
@@ -462,12 +549,50 @@ def upsert_playlist(
     dominant_mood: Optional[str] = None,
     art_s3_key: Optional[str] = None,
     is_auto_generated: bool = False,
-) -> None:
-    """Insert or update a playlist row (used by auto-grouping). # MUST SCOPE BY USER"""
+) -> str:
+    """Insert or update a playlist row (used by auto-grouping); returns the
+    canonical playlist id actually written.
+
+    For auto-generated playlists, identity is the natural key
+    (user_id, dominant_mood) — NULL mood is the single "From Your Brain"
+    catch-all — NOT the supplied `playlist_id`. The supplied id is derived from
+    the resolved user_id, which can change across runs (seed-admin vs platform
+    user, migration 0016); keying on it produced duplicate rows. We reuse any
+    existing per-mood playlist's id so callers append to the right row.
+    # MUST SCOPE BY USER
+    """
     assert user_id is not None
     conn = _connect()
     cur = conn.cursor()
     try:
+        existing_id = None
+        if is_auto_generated:
+            cur.execute(
+                """SELECT id FROM aria_playlists
+                   WHERE user_id = %s AND is_auto_generated = TRUE
+                     AND dominant_mood IS NOT DISTINCT FROM %s::aria_mood
+                   ORDER BY created_at, id
+                   LIMIT 1""",
+                (user_id, dominant_mood),
+            )
+            row = cur.fetchone()
+            if row:
+                existing_id = row[0]
+
+        if existing_id is not None:
+            cur.execute(
+                """UPDATE aria_playlists
+                   SET title = %s,
+                       dominant_mood = %s::aria_mood,
+                       art_s3_key = COALESCE(%s, art_s3_key),
+                       is_auto_generated = %s,
+                       updated_at = now()
+                   WHERE id = %s AND user_id = %s""",
+                (title, dominant_mood, art_s3_key, is_auto_generated, existing_id, user_id),
+            )
+            conn.commit()
+            return str(existing_id)
+
         cur.execute(
             """INSERT INTO aria_playlists
                (id, user_id, title, dominant_mood, art_s3_key, is_auto_generated)
@@ -477,10 +602,13 @@ def upsert_playlist(
                    dominant_mood = EXCLUDED.dominant_mood,
                    art_s3_key = COALESCE(EXCLUDED.art_s3_key, aria_playlists.art_s3_key),
                    is_auto_generated = EXCLUDED.is_auto_generated,
-                   updated_at = now()""",
+                   updated_at = now()
+               RETURNING id""",
             (playlist_id, user_id, title, dominant_mood, art_s3_key, is_auto_generated),
         )
+        new_id = cur.fetchone()[0]
         conn.commit()
+        return str(new_id)
     finally:
         cur.close()
         conn.close()

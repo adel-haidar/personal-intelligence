@@ -348,3 +348,45 @@ class TestAutoGroupPlaylists:
                  patch.object(gen_module, "add_tracks_to_playlist", side_effect=lambda *a, **kw: None):
                 gen_module._auto_group_playlists({"calm": ["t1"]}, user_id)
             assert set(upserted2) == set(first_run_ids)
+
+
+# ── Topic-diverse memory sampling ──────────────────────────────────────────────
+
+class TestFetchRecentMemories:
+    """The sampler must not let one over-represented theme (e.g. a burst of
+    finance memories) dominate the LLM context — that was the 'all songs are
+    finance' bug."""
+
+    def _patched_rows(self, rows):
+        """Patch generator._connect so _fetch_recent_memories sees `rows`
+        (list of dicts) as the recency-window query result."""
+        from private_internet.content.aria import generator as gen_module
+        cur = MagicMock()
+        cur.fetchall.return_value = rows
+        conn = MagicMock()
+        conn.cursor.return_value = cur
+        return patch.object(gen_module, "_connect", return_value=conn)
+
+    def test_diversifies_away_from_dominant_tag(self):
+        from private_internet.content.aria import generator as gen_module
+        # 50 finance memories, 1 health memory — pure recency would never pick health.
+        rows = [{"title": f"f{i}", "content": "c", "tags": "finance"} for i in range(50)]
+        rows.append({"title": "h", "content": "c", "tags": "health,daily"})
+        with self._patched_rows(rows):
+            picked = gen_module._fetch_recent_memories("u" * 36, limit=8)
+        titles = {p["title"] for p in picked}
+        assert "h" in titles, "health memory must surface despite finance dominance"
+        assert len(picked) == 8
+
+    def test_returns_all_when_fewer_than_limit(self):
+        from private_internet.content.aria import generator as gen_module
+        rows = [{"title": "a", "content": "c", "tags": "x"},
+                {"title": "b", "content": "c", "tags": "y"}]
+        with self._patched_rows(rows):
+            picked = gen_module._fetch_recent_memories("u" * 36, limit=8)
+        assert len(picked) == 2
+
+    def test_empty_on_db_error(self):
+        from private_internet.content.aria import generator as gen_module
+        with patch.object(gen_module, "_connect", side_effect=RuntimeError("boom")):
+            assert gen_module._fetch_recent_memories("u" * 36, limit=8) == []

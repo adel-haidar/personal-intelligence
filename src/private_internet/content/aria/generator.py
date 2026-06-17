@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -47,6 +48,9 @@ from private_internet.database import _connect
 logger = logging.getLogger(__name__)
 
 _SEM = asyncio.Semaphore(2)
+
+# Recency window we sample diversely from (vs. taking the newest N raw).
+_MEMORY_SAMPLE_WINDOW = 200
 
 # ── Bedrock tool schema (forced tool_choice, temperature=0) ───────────────────
 
@@ -127,23 +131,62 @@ _SYSTEM_PROMPT = (
 # ── Memory fetching ───────────────────────────────────────────────────────────
 
 def _fetch_recent_memories(user_id: str, limit: int = 8) -> list[dict]:
-    """Fetch recent memories for context. Falls back to empty list on error."""
+    """Fetch a *topic-diverse* sample of the user's memories for track context.
+
+    Pure recency (ORDER BY created_at DESC LIMIT n) biased every track toward
+    whatever was added most recently — e.g. a burst of finance-agent test runs
+    made every track "finance" while daily health summaries got buried. Instead
+    we pull a larger recent window, bucket by the memory's primary tag, and
+    round-robin across buckets (shuffled per call) so distinct themes (health,
+    finance, …) are represented and successive tracks in a batch differ.
+
+    Falls back to plain recency / empty list on error. # MUST SCOPE BY USER
+    """
     try:
         from psycopg2.extras import RealDictCursor
         conn = _connect()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         try:
             cur.execute(
-                """SELECT title, content FROM memories
+                """SELECT title, content, tags FROM memories
                    WHERE user_id = %s AND merged_into IS NULL
                    ORDER BY created_at DESC
                    LIMIT %s""",
-                (user_id, limit),
+                (user_id, _MEMORY_SAMPLE_WINDOW),
             )
-            return [dict(r) for r in cur.fetchall()]
+            rows = [dict(r) for r in cur.fetchall()]
         finally:
             cur.close()
             conn.close()
+
+        if len(rows) <= limit:
+            return rows
+
+        # Bucket by primary tag so a finance-heavy window cannot crowd out other
+        # themes; untagged memories share one bucket so they don't dominate either.
+        buckets: dict[str, list[dict]] = {}
+        for r in rows:
+            first_tag = next(
+                (t.strip().lower() for t in (r.get("tags") or "").split(",") if t.strip()),
+                "__untagged__",
+            )
+            buckets.setdefault(first_tag, []).append(r)
+
+        rnd = random.Random()
+        order = list(buckets.keys())
+        rnd.shuffle(order)
+        for k in order:
+            rnd.shuffle(buckets[k])
+
+        # Round-robin one memory per bucket until we have `limit`.
+        picked: list[dict] = []
+        idx = 0
+        while len(picked) < limit and any(buckets[k] for k in order):
+            k = order[idx % len(order)]
+            if buckets[k]:
+                picked.append(buckets[k].pop())
+            idx += 1
+        return picked[:limit]
     except Exception as e:
         logger.warning("[user:%s] could not fetch memories: %s", user_id[:8], e)
         return []
@@ -242,29 +285,32 @@ def _auto_group_playlists(track_ids_by_mood: dict[str, list[str]], user_id: str)
     for mood, tids in track_ids_by_mood.items():
         if not tids:
             continue
-        # Stable UUID derived from user_id + mood string (deterministic).
+        # Stable UUID derived from user_id + mood string (deterministic) — used
+        # only when no per-mood playlist exists yet. upsert_playlist reuses any
+        # existing row's id (keyed on user_id+mood) and returns the canonical id
+        # we must append tracks to.
         pl_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{user_id}:mood:{mood}"))
-        upsert_playlist(
+        canonical_id = upsert_playlist(
             playlist_id=pl_id,
             user_id=user_id,
             title=mood_labels.get(mood, mood.capitalize()),
             dominant_mood=mood,
             is_auto_generated=True,
         )
-        add_tracks_to_playlist(pl_id, tids, user_id=user_id)
+        add_tracks_to_playlist(canonical_id, tids, user_id=user_id)
 
     # "From your brain" — all ready tracks
     all_ids = [tid for tids in track_ids_by_mood.values() for tid in tids]
     if all_ids:
         brain_pl_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{user_id}:brain"))
-        upsert_playlist(
+        canonical_brain_id = upsert_playlist(
             playlist_id=brain_pl_id,
             user_id=user_id,
             title="From Your Brain",
             dominant_mood=None,
             is_auto_generated=True,
         )
-        add_tracks_to_playlist(brain_pl_id, all_ids, user_id=user_id)
+        add_tracks_to_playlist(canonical_brain_id, all_ids, user_id=user_id)
 
 
 # ── Single track generation ───────────────────────────────────────────────────
