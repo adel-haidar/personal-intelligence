@@ -1,4 +1,10 @@
+import textwrap
+
 from assistant.job.models import RunReport
+
+
+def _wrap(text: str, width: int = 64) -> list[str]:
+    return textwrap.wrap(text, width=width) or [text]
 
 
 def format_report(report: RunReport) -> str:
@@ -18,6 +24,13 @@ def format_report(report: RunReport) -> str:
         f"(Strong: {len(report.strong_matches)} | Good: {len(report.good_matches)})",
         "",
     ]
+
+    if report.notice:
+        lines += [
+            "─── WHY THIS RUN IS EMPTY ────────────────────────────────────────",
+            *(f"  {ln}" for ln in _wrap(report.notice)),
+            "",
+        ]
 
     if report.strong_matches:
         lines.append("─── STRONG MATCHES (score ≥ 70) ──────────────────────────────────")

@@ -11,6 +11,7 @@ from assistant.job.db import count_all, init_pool, upsert_match
 from assistant.job.models import JobListing, MatchResult, RunReport, ScoredListing
 from assistant.job.report import format_report
 from assistant.job.scorer import JobScorer
+from assistant.job.scrapers.base import ScraperError
 from assistant.job.scrapers.rapidapi import RapidApiScraper
 
 logger = logging.getLogger(__name__)
@@ -183,6 +184,7 @@ async def run_agent(
 
     all_raw: list[JobListing] = []
     platforms_used: set[str] = set()
+    scrape_errors: list[str] = []
 
     for code in country_codes:
         for query, city in search_queries:
@@ -192,6 +194,13 @@ async def run_agent(
                     all_raw.extend(results)
                     if results:
                         platforms_used.add(scraper.name)
+                except ScraperError as exc:
+                    # A real source failure (quota/key/5xx) — remember the reason
+                    # so an empty run can explain itself instead of saying "0".
+                    scrape_errors.append(str(exc))
+                    logger.warning(
+                        "Scraper %s error for %r in %s: %s", scraper.name, query, code, exc
+                    )
                 except Exception:
                     logger.exception(
                         "Scraper %s failed for %r in %s", scraper.name, query, code
@@ -282,6 +291,37 @@ async def run_agent(
 
     db_total = await count_all(pool)
 
+    # When a run comes back empty, say WHY — an empty scrape is the single most
+    # confusing outcome ("ran fast, found nothing") and it has several distinct,
+    # actionable causes. Surfaced in the report so it never reads as a bare "0".
+    notice: Optional[str] = None
+    if raw_count == 0:
+        if not candidate_profile.strip():
+            notice = (
+                "No job profile found in your Brain. The job hunt scores against "
+                "your own résumé / skills / preferences and won't scrape without "
+                "one — add them to your Brain, then run again."
+            )
+        elif not scrapers:
+            notice = (
+                "No job source is configured: RAPIDAPI_KEY is not set, so the "
+                "JSearch source is unavailable."
+            )
+        elif scrape_errors:
+            reasons = "; ".join(dict.fromkeys(scrape_errors))  # de-dup, keep order
+            notice = (
+                f"The job source returned no listings because it errored: {reasons}. "
+                "This is usually an exhausted API quota or an invalid key."
+            )
+        else:
+            notice = (
+                "The job source returned no listings for your queries in "
+                f"{', '.join(country_names) or 'the selected countries'}. "
+                "Try more or different countries, or broaden the skills/roles in "
+                "your Brain profile."
+            )
+        logger.warning("Empty run for user %s — %s", user_id, notice)
+
     if memory_client:
         try:
             top = strong_matches[0] if strong_matches else (good_matches[0] if good_matches else None)
@@ -315,6 +355,7 @@ async def run_agent(
         rejection_log=dict(rejection_log),
         db_saved_this_run=db_saved,
         db_cumulative=db_total,
+        notice=notice,
     )
 
     logger.info(

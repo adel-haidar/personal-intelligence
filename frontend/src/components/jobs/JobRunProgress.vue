@@ -15,6 +15,9 @@ let elapsedTimer: ReturnType<typeof setInterval> | null = null
 let dismissTimer: ReturnType<typeof setTimeout> | null = null
 
 const visible = computed(() => store.state.runStatus !== 'idle')
+// A completed run with nothing to show carries a reason (empty scrape, quota,
+// no profile). Surface it instead of a bare "0 matches found".
+const runNotice = computed(() => store.state.lastReport?.data?.notice ?? null)
 
 watch(() => store.state.runStatus, (status) => {
   if (status === 'running') {
@@ -35,7 +38,11 @@ watch(() => store.state.runStatus, (status) => {
     if (status === 'done') {
       doneMatchCount.value  = store.state.matches.length
       doneStrongCount.value = store.strongMatchCount
-      dismissTimer = setTimeout(() => store.dismissRunStatus(), 5000)
+      // Keep an explanatory notice on screen; only auto-dismiss the plain
+      // "run complete" confirmation.
+      if (!runNotice.value) {
+        dismissTimer = setTimeout(() => store.dismissRunStatus(), 5000)
+      }
     }
   }
 })
@@ -67,10 +74,16 @@ onUnmounted(() => {
       <template v-else-if="store.state.runStatus === 'done'">
         <div class="progress-row">
           <span class="icon-done" aria-hidden="true">✓</span>
-          <span class="progress-text">
+          <span v-if="runNotice" class="progress-text">{{ runNotice }}</span>
+          <span v-else class="progress-text">
             Run complete — {{ doneMatchCount }} matches found.
             {{ doneStrongCount }} strong.
           </span>
+          <button
+            v-if="runNotice"
+            class="btn btn-secondary retry-btn"
+            @click="store.triggerRun()"
+          >Retry</button>
           <button class="dismiss-btn" aria-label="Dismiss" @click="store.dismissRunStatus()">✕</button>
         </div>
       </template>

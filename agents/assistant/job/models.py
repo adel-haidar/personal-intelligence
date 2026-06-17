@@ -54,3 +54,6 @@ class RunReport(BaseModel):
     rejection_log: dict[str, list[str]]
     db_saved_this_run: int
     db_cumulative: int
+    # Set when a run produced no usable result (e.g. empty scrape), explaining
+    # why so the UI never shows a bare, mysterious "0 matches".
+    notice: Optional[str] = None

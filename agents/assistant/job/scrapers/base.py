@@ -5,6 +5,13 @@ from typing import Optional
 from assistant.job.models import JobListing
 
 
+class ScraperError(Exception):
+    """A hard scraper failure (quota exhausted, bad key, source 5xx) — as opposed
+    to a successful call that simply returned no listings. Raised so the agent can
+    tell the user *why* a scrape came back empty instead of silently reporting
+    "0 matches"."""
+
+
 class BaseScraper(ABC):
     name: str = "base"
 

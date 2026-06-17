@@ -6,7 +6,7 @@ import httpx
 
 from assistant.job.countries import name_for
 from assistant.job.models import JobListing
-from assistant.job.scrapers.base import BaseScraper
+from assistant.job.scrapers.base import BaseScraper, ScraperError
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +57,31 @@ class RapidApiScraper(BaseScraper):
                 )
                 r.raise_for_status()
             data = r.json()
-        except Exception:
+        except httpx.HTTPStatusError as exc:
+            # Classify so the agent can tell the user a real reason instead of a
+            # silent empty result. 429 = monthly quota / rate limit (the usual
+            # "worked for weeks then nothing"); 401/403 = bad or missing key.
+            status = exc.response.status_code
+            remaining = exc.response.headers.get("x-ratelimit-requests-remaining")
+            if status == 429:
+                reason = "JSearch/RapidAPI quota exhausted or rate-limited (HTTP 429)"
+                if remaining is not None:
+                    reason += f" — requests remaining: {remaining}"
+            elif status in (401, 403):
+                reason = f"JSearch/RapidAPI rejected the API key (HTTP {status})"
+            else:
+                reason = f"JSearch/RapidAPI returned HTTP {status}"
+            logger.error("RapidAPI %s for query=%r country=%s", reason, query, country)
+            raise ScraperError(reason) from exc
+        except Exception as exc:
             logger.exception(
                 "RapidAPI request failed for query=%r country=%s", query, country
             )
-            return []
+            raise ScraperError(f"JSearch/RapidAPI request failed: {exc}") from exc
+
+        remaining = r.headers.get("x-ratelimit-requests-remaining")
+        if remaining is not None:
+            logger.info("RapidAPI quota — requests remaining: %s", remaining)
 
         listings: list[JobListing] = []
         for item in data.get("data") or []:

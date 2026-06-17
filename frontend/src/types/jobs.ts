@@ -76,6 +76,9 @@ export interface RunReport {
     rejection_log: Record<string, string[]>
     db_saved_this_run: number
     db_cumulative: number
+    // Set when a run produced no usable result, explaining why (empty scrape,
+    // exhausted quota, no Brain profile, …) so an empty run is never mysterious.
+    notice?: string | null
   } | null
 }
 
