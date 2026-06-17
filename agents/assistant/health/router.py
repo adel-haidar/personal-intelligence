@@ -10,6 +10,8 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from functools import lru_cache
+from pydantic import BaseModel
+from typing import Optional
 
 from assistant.health.compute import _DEVICE_SOURCES, compute_daily_summary
 from assistant.health.db import (
@@ -775,6 +777,71 @@ async def health_report(
         coach_insight=coach_insight,
         analysis=analysis,
         reasoning=reasoning,
+        has_data=has_data,
+    )
+
+    filename = f"health-report-{target_date.isoformat()}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class HealthReportRequest(BaseModel):
+    """The analysis the dashboard is currently displaying, posted so the PDF
+    matches the screen exactly. Daily analyses are generated live (POST
+    /run-daily) and not reliably persisted in MCP memory, so the GET variant's
+    server-side fetch usually finds nothing — hence the client sends what it has."""
+    summary: Optional[DailyHealthSummary] = None
+    flags: list[str] = []
+    coach_insight: str = ""
+    analysis: str = ""
+    reasoning: str = ""
+
+
+@router.post("/health/report/{target_date}")
+async def health_report_from_payload(
+    target_date: date,
+    body: HealthReportRequest,
+    ident: dict = Depends(require_user),
+):
+    """Render the doctor-facing PDF from the analysis the client is showing.
+
+    The narrative (coach insight / analysis / reasoning / flags) comes straight
+    from the posted payload so the PDF mirrors the dashboard. Metric values are
+    backfilled from a server-side computed summary for any field the client left
+    null. No new LLM calls. # MUST SCOPE BY USER"""
+    pool = await _pool()
+    user_id = await _resolve_user_id(ident, pool)
+
+    try:
+        computed = await compute_daily_summary(pool, target_date, user_id=user_id)
+    except Exception:
+        logger.warning("PDF report: compute_daily_summary failed for %s", target_date, exc_info=True)
+        computed = DailyHealthSummary(date=target_date)
+
+    summary = body.summary or computed
+    # Backfill any metric the client left null from the freshly computed summary.
+    for field in DailyHealthSummary.model_fields:
+        if getattr(summary, field) is None and getattr(computed, field) is not None:
+            object.__setattr__(summary, field, getattr(computed, field))
+
+    has_data = bool(
+        body.coach_insight or body.analysis or body.reasoning or body.flags
+    ) or any(
+        getattr(summary, f) is not None
+        for f in DailyHealthSummary.model_fields
+        if f != "date"
+    )
+
+    pdf_bytes = _build_pdf(
+        target_date=target_date,
+        summary=summary,
+        flags=body.flags,
+        coach_insight=body.coach_insight,
+        analysis=body.analysis,
+        reasoning=body.reasoning,
         has_data=has_data,
     )
 

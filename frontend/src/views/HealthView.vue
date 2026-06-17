@@ -446,23 +446,34 @@ async function sendToDoctor() {
     // Fetch bearer token
     const token = await requireAuth()
 
-    // Fetch display_name from /api/auth/me
+    // Fetch display_name from /api/auth/me. The endpoint wraps the user in a
+    // `user` key — read me.user.display_name, not me.display_name.
     let displayName = ''
     try {
       const meRes = await fetch(`${API_BASE}/api/auth/me`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (meRes.ok) {
-        const me = await meRes.json() as User
-        displayName = me.display_name ?? ''
+        const payload = await meRes.json() as { user?: User } & Partial<User>
+        displayName = payload.user?.display_name ?? payload.display_name ?? ''
       }
     } catch {
       // Non-critical — fall back to empty string
     }
 
-    // Fetch the PDF report
+    // POST the analysis we're already displaying so the PDF mirrors the screen.
+    // Daily analyses are generated live and not reliably persisted server-side,
+    // so we send what the dashboard holds rather than have the backend re-fetch.
     const res = await fetch(`${API_BASE}/api/health/report/${activeDate.value}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        summary: daily.value?.summary ?? null,
+        flags: daily.value?.flags ?? [],
+        coach_insight: daily.value?.coach_insight ?? '',
+        analysis: daily.value?.analysis ?? '',
+        reasoning: daily.value?.reasoning ?? '',
+      }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const pdfBlob = await res.blob()
