@@ -1,11 +1,10 @@
 import json
 import logging
 from datetime import date, timedelta
+from urllib.parse import urlparse
 
 import asyncpg
 import httpx
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
 
 from assistant.health.compute import (
     compute_daily_summary,
@@ -102,28 +101,57 @@ async def run_daily_health_workflow(
     return result
 
 
+def _api_base_url(mcp_url: str) -> str:
+    """'https://host/mcp/mcp' → 'https://host'. The daily summary is persisted via
+    the REST memory API, NOT the MCP protocol endpoint. The MCP `/mcp` endpoint
+    is OAuth-only (claude.ai), so forwarding the platform JWT to it 401s and the
+    save silently failed. The REST `/api/memory/*` routes accept the platform JWT
+    via RequestContext (same path fetch_medical_records already uses)."""
+    parsed = urlparse(mcp_url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+async def _find_existing_summary_id(
+    client: httpx.AsyncClient, base_url: str, title: str
+) -> str | None:
+    """memory_id of an existing memory with this EXACT title, if any — so daily
+    re-runs UPDATE the same summary instead of piling up duplicates."""
+    resp = await client.get(
+        f"{base_url}/api/memory",
+        params={"q": title, "page": "1", "page_size": "100"},
+    )
+    resp.raise_for_status()
+    for item in resp.json().get("items", []):
+        if (item.get("title") or "").strip() == title:
+            return item.get("memory_id")
+    return None
+
+
 async def _save_to_mcp_memory(
     result: HealthInsightResponse,
     mcp_url: str,
     token: str,
 ) -> None:
-    """Persist the daily health summary to MCP memory with searchable tags."""
+    """Persist the daily health summary via the REST memory API, upserting by title."""
+    base_url = _api_base_url(mcp_url)
     title = f"Health summary {result.date.isoformat()}"
     content = result.model_dump_json()
     tags = ["health", "daily", result.date.isoformat()] + result.flags
-
     headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(
-            url=mcp_url, http_client=http_client
-        ) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                await session.call_tool(
-                    "save",
-                    {"title": title, "content": content, "tags": tags},
-                )
-    logger.info("Health summary %s saved to MCP memory", result.date.isoformat())
+    payload = {"title": title, "content": content, "tags": tags}
+
+    async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
+        existing_id = await _find_existing_summary_id(client, base_url, title)
+        if existing_id:
+            resp = await client.patch(f"{base_url}/api/memory/{existing_id}", json=payload)
+        else:
+            resp = await client.post(f"{base_url}/api/memory/text", json=payload)
+        resp.raise_for_status()
+    logger.info(
+        "Health summary %s saved to memory (%s)",
+        result.date.isoformat(),
+        "updated" if existing_id else "created",
+    )
 
 
 async def fetch_from_mcp_memory(
@@ -131,29 +159,31 @@ async def fetch_from_mcp_memory(
     mcp_url: str,
     token: str,
 ) -> HealthInsightResponse | None:
-    """Retrieve a previously saved daily health summary from MCP memory."""
-    query = f"Health summary {target_date.isoformat()}"
+    """Retrieve a previously saved daily health summary via the REST memory API."""
+    base_url = _api_base_url(mcp_url)
+    title = f"Health summary {target_date.isoformat()}"
     headers = {"Authorization": f"Bearer {token}"}
     try:
-        async with httpx.AsyncClient(headers=headers) as http_client:
-            async with streamable_http_client(
-                url=mcp_url, http_client=http_client
-            ) as (read, write, _):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.call_tool("search", {"query": query})
-                    if result.isError or not result.content:
-                        return None
-                    for item in result.content:
-                        if not hasattr(item, "text") or not item.text:
-                            continue
-                        try:
-                            data = json.loads(item.text)
-                            parsed = HealthInsightResponse.model_validate(data)
-                            if str(parsed.date) == target_date.isoformat():
-                                return parsed
-                        except Exception:
-                            continue
+        async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
+            resp = await client.get(
+                f"{base_url}/api/memory",
+                params={"q": title, "page": "1", "page_size": "100"},
+            )
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+        for item in items:
+            if (item.get("title") or "").strip() != title:
+                continue
+            content = item.get("content")
+            if not content:
+                continue
+            try:
+                data = json.loads(content)
+                parsed = HealthInsightResponse.model_validate(data)
+                if str(parsed.date) == target_date.isoformat():
+                    return parsed
+            except Exception:
+                continue
     except Exception:
-        logger.warning("Failed to fetch health summary from MCP memory", exc_info=True)
+        logger.warning("Failed to fetch health summary from memory", exc_info=True)
     return None
