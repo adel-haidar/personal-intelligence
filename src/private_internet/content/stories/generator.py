@@ -133,7 +133,7 @@ async def generate_film(
                 "keywords": [k.strip() for k in (premise or "").split(",") if k.strip()],
             }
             research = []
-        creator = CreatorSelector().select_for_topic(conn, topic)
+        creator = CreatorSelector().select_for_topic(conn, topic, user_id=user_id)
 
         # 3. Scene-by-scene script.
         duration_min, duration_max = STORIES_DURATION_TARGETS["short_film"]

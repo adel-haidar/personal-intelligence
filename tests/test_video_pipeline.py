@@ -3,7 +3,9 @@ import uuid
 import subprocess
 import pytest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock, call
+from unittest.mock import MagicMock, patch, AsyncMock, call, create_autospec
+
+from private_internet.content.creator_selector import CreatorSelector
 
 # Image gen dispatches by IMAGE_BACKEND (default fal.ai); these tests exercise the
 # Bedrock/Nova-Canvas path, so force that backend.
@@ -320,7 +322,9 @@ def _patched_pipeline(conn, script=None, fail_script=False):
     asset_store.upload_video.return_value = "https://cdn.example/video.mp4"
     asset_store.upload_thumbnail.return_value = "https://cdn.example/thumb.png"
 
-    selector = MagicMock()
+    # autospec enforces the real select_for_topic(db, topic, *, user_id) signature,
+    # so a call site missing the required user_id raises TypeError (regression guard).
+    selector = create_autospec(CreatorSelector, instance=True)
     selector.select_for_topic.return_value = _creator()
 
     base = "private_internet.content.jobs.video_job"
@@ -602,3 +606,42 @@ class TestSignalNeverCallsKling:
         mock_long.assert_awaited_once()
         mock_legacy.assert_not_called()
         assert result["created"] == ["vid-1"]
+
+    @pytest.mark.anyio
+    async def test_generate_long_video_selects_creator_scoped_by_user(self):
+        """Regression: generate_long_video (the SIGNAL/STORIES scene pipeline) must
+        pass user_id to select_for_topic. An autospec'd CreatorSelector enforces the
+        real signature, so the missing-user_id bug that silently failed every
+        long-form render in prod (TypeError) would fail this test."""
+        conn, _ = _recording_conn()
+
+        selector = create_autospec(CreatorSelector, instance=True)
+        selector.select_for_topic.return_value = _creator()
+
+        script = SimpleNamespace(
+            scenes=[{"kling_prompt": "p", "duration": 5}],
+            narration_text="narration",
+            title="A Title",
+            total_duration_seconds=40,
+        )
+        script_gen = MagicMock()
+        script_gen.generate = AsyncMock(return_value=script)
+
+        asset_store = MagicMock()
+        asset_store.cdn_base = "https://cdn"
+
+        base = "private_internet.content.jobs.video_job"
+        with patch(f"{base}._connect", return_value=conn), \
+             patch(f"{base}._select_topic", return_value=_topic()), \
+             patch(f"{base}._fetch_research", return_value=[]), \
+             patch(f"{base}.CreatorSelector", return_value=selector), \
+             patch(f"{base}.resolve_user_language", return_value="en"), \
+             patch(f"{base}.SceneScriptGenerator", return_value=script_gen), \
+             patch(f"{base}.assemble_video", new=AsyncMock()), \
+             patch(f"{base}.AssetStore", return_value=asset_store):
+            from private_internet.content.jobs.video_job import generate_long_video
+            vid = await generate_long_video(user_id="u1", duration_band="short")
+
+        assert vid
+        _, kwargs = selector.select_for_topic.call_args
+        assert kwargs.get("user_id") == "u1"

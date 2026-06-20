@@ -201,7 +201,7 @@ async def generate_video(topic_id: str | None = None, *, user_id: str) -> str:
     try:
         # 1. Select topic + 2. creator
         topic = _select_topic(conn, topic_id, user_id=user_id)
-        creator = CreatorSelector().select_for_topic(conn, topic)
+        creator = CreatorSelector().select_for_topic(conn, topic, user_id=user_id)
         research = _fetch_research(conn, topic["id"], user_id=user_id)
 
         # Resolve user language once per video; all downstream steps share it.
@@ -377,7 +377,7 @@ async def generate_long_video(
 
     try:
         topic = _select_topic(conn, topic_id, user_id=user_id)
-        creator = CreatorSelector().select_for_topic(conn, topic)
+        creator = CreatorSelector().select_for_topic(conn, topic, user_id=user_id)
         research = _fetch_research(conn, topic["id"], user_id=user_id)
 
         # Resolve user language once per video; all downstream steps share it.
