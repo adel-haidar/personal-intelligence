@@ -27,9 +27,16 @@ const emit = defineEmits<{
 const weightInput = ref('')
 const weightError = ref('')
 
+// Accept both decimal separators: many locales (e.g. de-DE) type "70,5".
+// Strip spaces and normalise comma → dot so a number input quirk can't blank it.
+function cleanWeight(): string {
+  return weightInput.value.replace(/\s/g, '').replace(',', '.')
+}
+
 function validateWeight(): boolean {
-  const v = parseFloat(weightInput.value)
-  if (!weightInput.value.trim() || isNaN(v) || v <= 0 || v > 500) {
+  const raw = cleanWeight()
+  const v = parseFloat(raw)
+  if (!raw || isNaN(v) || v <= 0 || v > 500) {
     weightError.value = 'Enter a weight between 1 and 500 kg.'
     return false
   }
@@ -93,7 +100,7 @@ watch(() => props.open, (open) => {
 function submit() {
   if (props.kind === 'weight') {
     if (!validateWeight()) return
-    const kg = parseFloat(parseFloat(weightInput.value).toFixed(2))
+    const kg = parseFloat(parseFloat(cleanWeight()).toFixed(2))
     emit('save', { kg })
   } else {
     if (!validateSavings()) return
@@ -149,10 +156,7 @@ const currentError = computed(() =>
                 id="gp-weight"
                 v-model="weightInput"
                 class="gp-input"
-                type="number"
-                min="1"
-                max="500"
-                step="0.1"
+                type="text"
                 placeholder="e.g. 70"
                 inputmode="decimal"
                 :disabled="saving"

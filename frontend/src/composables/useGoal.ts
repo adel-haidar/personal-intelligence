@@ -64,7 +64,7 @@ export async function checkSavingsGoal(): Promise<{ amount: number; currency: st
 export async function saveWeightGoal(kg: number): Promise<void> {
   const token = await requireAuth()
   const content = `My target weight is ${kg} kg.\nTARGET_WEIGHT_KG=${kg}`
-  await fetch(`${API_BASE}/api/memory/text`, {
+  const res = await fetch(`${API_BASE}/api/memory/text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
@@ -73,6 +73,7 @@ export async function saveWeightGoal(kg: number): Promise<void> {
       tags: ['health', 'goal', 'weight'],
     }),
   })
+  if (!res.ok) throw new Error(`save weight goal failed: ${res.status}`)
   _weightGoal.value = kg
   _weightChecked.value = true
 }
@@ -80,7 +81,7 @@ export async function saveWeightGoal(kg: number): Promise<void> {
 export async function saveSavingsGoal(amount: number, currency: string): Promise<void> {
   const token = await requireAuth()
   const content = `My annual savings goal is ${amount} ${currency}.\nANNUAL_SAVINGS_GOAL=${amount} ${currency}`
-  await fetch(`${API_BASE}/api/memory/text`, {
+  const res = await fetch(`${API_BASE}/api/memory/text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
@@ -89,6 +90,7 @@ export async function saveSavingsGoal(amount: number, currency: string): Promise
       tags: ['finances', 'goal', 'savings'],
     }),
   })
+  if (!res.ok) throw new Error(`save savings goal failed: ${res.status}`)
   _savingsGoal.value = { amount, currency }
   _savingsChecked.value = true
 }
