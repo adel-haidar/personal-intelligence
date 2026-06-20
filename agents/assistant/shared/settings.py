@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     LLM call dominates a run's wall time; raising this shortens runs but risks
     Bedrock throttling. Lower it if you see ThrottlingException in the logs."""
 
+    upload_dir: str = "/uploads"
+    """Where Service A persists users' original uploaded files
+    ({upload_dir}/{user_id}/{hash}_{filename}). Shared filesystem on the EC2
+    host. The application agent reads original CV/certificate PDFs from here to
+    merge them into the generated application. Must match Service A's UPLOAD_DIR."""
+
 
 @lru_cache
 def get_settings() -> Settings:

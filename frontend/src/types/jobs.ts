@@ -98,3 +98,51 @@ export interface CountriesResponse {
 
 export type SortField = 'match_score' | 'run_timestamp' | 'company' | 'country'
 export type SortDir = 'asc' | 'desc'
+
+// ── AI job applications ("Apply" flow) ───────────────────────────────────────
+
+export type ApplicationStatus = 'generating' | 'ready' | 'failed'
+
+export interface ApplicationManifestDoc {
+  filename: string
+  kind: string
+  source: string
+  pages?: number
+  skipped?: boolean
+}
+
+export interface ApplicationManifest {
+  documents: ApplicationManifestDoc[]
+  cover_letter_included: boolean
+  plan?: {
+    tone?: string
+    key_points?: string[]
+    rationale?: string
+    documents?: unknown[]
+  }
+}
+
+export interface JobApplication {
+  id: number
+  match_id: number
+  status: ApplicationStatus
+  cover_letter: string | null
+  manifest: ApplicationManifest | null
+  feedback_history: string[]
+  error: string | null
+  iterations: number
+  has_pdf: boolean
+  updated_at: string | null
+  created_at: string | null
+}
+
+export interface StartApplicationResponse {
+  application_id: number
+  status: ApplicationStatus
+}
+
+export interface ApplyResponse {
+  job_url: string | null
+  match_id: number
+  status: 'applied'
+}

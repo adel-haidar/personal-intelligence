@@ -4,14 +4,22 @@ from typing import Optional
 import boto3
 from botocore.config import Config
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from assistant.job import agent as job_agent
 from assistant.job import countries as job_countries
+from assistant.job.application.service import generate_application
 from assistant.job.db import (
+    append_feedback,
+    create_or_reset_application,
     fail_run,
     finish_run,
+    get_application,
+    get_application_by_match,
+    get_application_pdf,
     get_latest_run,
+    get_match,
     init_pool,
     list_matches,
     set_status,
@@ -32,6 +40,10 @@ _seed_admin_id: Optional[str] = None
 
 class StatusUpdate(BaseModel):
     status: str
+
+
+class FeedbackBody(BaseModel):
+    feedback: str
 
 
 async def _resolve_user_id(ident: dict, pool) -> str:
@@ -129,6 +141,166 @@ async def update_status(
             "Valid: new | reviewing | applied | interviewing | rejected | withdrawn | expired",
         )
     return {"id": match_id, "status": body.status}
+
+
+# ── Job applications (AI "Apply" flow) ────────────────────────────────────────
+
+
+def _serialize_application(app: dict) -> dict:
+    """Shape an application row for the API (no pdf bytes; ISO timestamps)."""
+    return {
+        "id": app["id"],
+        "match_id": app["match_id"],
+        "status": app["status"],
+        "cover_letter": app.get("cover_letter"),
+        "manifest": app.get("manifest"),
+        "feedback_history": app.get("feedback_history") or [],
+        "error": app.get("error"),
+        "iterations": app.get("iterations", 0),
+        "has_pdf": app.get("has_pdf", False),
+        "updated_at": app["updated_at"].isoformat() if app.get("updated_at") else None,
+        "created_at": app["created_at"].isoformat() if app.get("created_at") else None,
+    }
+
+
+@router.post("/matches/{match_id}/application")
+async def start_application(
+    match_id: int,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+    ident: dict = Depends(require_user),
+):
+    """Kick off AI generation of an application for this match (background)."""
+    if not settings.database_url:
+        raise HTTPException(503, "DATABASE_URL is not configured")
+    pool = await init_pool(settings.database_url)
+    user_id = await _resolve_user_id(ident, pool)
+
+    match = await get_match(pool, match_id, user_id=user_id)
+    if match is None:
+        raise HTTPException(404, f"Job match #{match_id} not found")
+
+    app_id = await create_or_reset_application(pool, match_id, user_id=user_id)
+    background_tasks.add_task(
+        generate_application,
+        settings,
+        token=ident["token"],
+        user_id=user_id,
+        match_id=match_id,
+        app_id=app_id,
+    )
+    return {"application_id": app_id, "status": "generating"}
+
+
+@router.get("/matches/{match_id}/application")
+async def get_application_for_match(
+    match_id: int,
+    settings: Settings = Depends(get_settings),
+    ident: dict = Depends(require_user),
+):
+    if not settings.database_url:
+        raise HTTPException(503, "DATABASE_URL is not configured")
+    pool = await init_pool(settings.database_url)
+    user_id = await _resolve_user_id(ident, pool)
+    app = await get_application_by_match(pool, match_id, user_id=user_id)
+    if app is None:
+        raise HTTPException(404, "No application for this match yet")
+    return _serialize_application(app)
+
+
+@router.get("/applications/{app_id}")
+async def get_application_status(
+    app_id: int,
+    settings: Settings = Depends(get_settings),
+    ident: dict = Depends(require_user),
+):
+    if not settings.database_url:
+        raise HTTPException(503, "DATABASE_URL is not configured")
+    pool = await init_pool(settings.database_url)
+    user_id = await _resolve_user_id(ident, pool)
+    app = await get_application(pool, app_id, user_id=user_id)
+    if app is None:
+        raise HTTPException(404, f"Application #{app_id} not found")
+    return _serialize_application(app)
+
+
+@router.get("/applications/{app_id}/pdf")
+async def download_application_pdf(
+    app_id: int,
+    settings: Settings = Depends(get_settings),
+    ident: dict = Depends(require_user),
+):
+    if not settings.database_url:
+        raise HTTPException(503, "DATABASE_URL is not configured")
+    pool = await init_pool(settings.database_url)
+    user_id = await _resolve_user_id(ident, pool)
+    pdf = await get_application_pdf(pool, app_id, user_id=user_id)
+    if pdf is None:
+        raise HTTPException(404, "Application PDF is not ready")
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="application-{app_id}.pdf"'},
+    )
+
+
+@router.post("/applications/{app_id}/feedback")
+async def submit_application_feedback(
+    app_id: int,
+    body: FeedbackBody,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+    ident: dict = Depends(require_user),
+):
+    """Apply the user's free-text feedback and regenerate the application."""
+    feedback = (body.feedback or "").strip()
+    if not feedback:
+        raise HTTPException(422, "Feedback text is required")
+    if not settings.database_url:
+        raise HTTPException(503, "DATABASE_URL is not configured")
+    pool = await init_pool(settings.database_url)
+    user_id = await _resolve_user_id(ident, pool)
+
+    app = await get_application(pool, app_id, user_id=user_id)
+    if app is None:
+        raise HTTPException(404, f"Application #{app_id} not found")
+
+    await append_feedback(pool, app_id, feedback, user_id=user_id)
+    # Re-open the row to 'generating' so polling reflects the in-progress revision.
+    await create_or_reset_application(pool, app["match_id"], user_id=user_id)
+    background_tasks.add_task(
+        generate_application,
+        settings,
+        token=ident["token"],
+        user_id=user_id,
+        match_id=app["match_id"],
+        app_id=app_id,
+        feedback=feedback,
+    )
+    return {"application_id": app_id, "status": "generating"}
+
+
+@router.post("/applications/{app_id}/apply")
+async def mark_application_applied(
+    app_id: int,
+    settings: Settings = Depends(get_settings),
+    ident: dict = Depends(require_user),
+):
+    """Mark the underlying match as 'applied' and return the job URL to open."""
+    if not settings.database_url:
+        raise HTTPException(503, "DATABASE_URL is not configured")
+    pool = await init_pool(settings.database_url)
+    user_id = await _resolve_user_id(ident, pool)
+
+    app = await get_application(pool, app_id, user_id=user_id)
+    if app is None:
+        raise HTTPException(404, f"Application #{app_id} not found")
+    match = await get_match(pool, app["match_id"], user_id=user_id)
+    if match is None:
+        raise HTTPException(404, "Job match not found")
+
+    await set_status(pool, app["match_id"], "applied", user_id=user_id)
+    return {"job_url": match.get("job_url"), "match_id": app["match_id"], "status": "applied"}
 
 
 @router.get("/report")

@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Optional
 
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS job_matches (
     disqualifier_flag TEXT,
     rejection_reason  TEXT,
     ai_summary        TEXT,
+    description       TEXT,
     status            VARCHAR(30)     NOT NULL DEFAULT 'new',
     applied_at        TIMESTAMPTZ,
     notes             TEXT,
@@ -40,6 +42,9 @@ CREATE TABLE IF NOT EXISTS job_matches (
 -- uniqueness is (user_id, job_url), not job_url alone. Idempotent for tables
 -- created before this (mirrors migrations/0009).
 ALTER TABLE job_matches ADD COLUMN IF NOT EXISTS user_id UUID;
+-- The full scraped job description, needed by the application agent. Older rows
+-- have NULL here and fall back to ai_summary + flags at application time.
+ALTER TABLE job_matches ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE job_matches DROP CONSTRAINT IF EXISTS job_matches_job_url_key;
 CREATE INDEX IF NOT EXISTS idx_jm_score   ON job_matches (match_score DESC);
 CREATE INDEX IF NOT EXISTS idx_jm_country ON job_matches (country);
@@ -65,6 +70,29 @@ CREATE TABLE IF NOT EXISTS job_runs (
     saved_count   INT             NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jr_user ON job_runs (user_id, started_at DESC);
+
+-- One AI-generated job application per (user, match). The merged PDF (cover
+-- letter + the user's original CV/certificate files) is stored inline as bytea
+-- so it survives restarts and the user can revisit it. Generation runs in the
+-- background: a row starts 'generating' and becomes 'ready' or 'failed'.
+-- Mirrors migrations/0010_job_applications.sql.
+CREATE TABLE IF NOT EXISTS job_applications (
+    id               SERIAL PRIMARY KEY,
+    user_id          UUID            NOT NULL,
+    match_id         INT             NOT NULL,
+    status           VARCHAR(20)     NOT NULL DEFAULT 'generating',
+    pdf_bytes        BYTEA,
+    cover_letter     TEXT,
+    manifest         JSONB,
+    feedback_history JSONB           NOT NULL DEFAULT '[]'::jsonb,
+    error            TEXT,
+    iterations       INT             NOT NULL DEFAULT 0,
+    created_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, match_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ja_user  ON job_applications (user_id);
+CREATE INDEX IF NOT EXISTS idx_ja_match ON job_applications (user_id, match_id);
 """
 
 # ADD CONSTRAINT has no IF NOT EXISTS, so the per-user unique is applied separately.
@@ -115,11 +143,13 @@ async def upsert_match(
                     posted_date, salary_raw, salary_min_local, salary_max_local,
                     currency, remote_type, match_score, match_tier,
                     tech_flags, domain_flags, positive_flags,
-                    disqualifier_flag, rejection_reason, ai_summary, user_id
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::uuid)
+                    disqualifier_flag, rejection_reason, ai_summary, user_id,
+                    description
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::uuid,$22)
                 ON CONFLICT (user_id, job_url) DO UPDATE SET
                     match_score   = EXCLUDED.match_score,
                     ai_summary    = EXCLUDED.ai_summary,
+                    description   = COALESCE(EXCLUDED.description, job_matches.description),
                     run_timestamp = NOW()
                 WHERE
                     EXCLUDED.match_score > job_matches.match_score + 5
@@ -136,6 +166,7 @@ async def upsert_match(
                 result.positive_flags or [],
                 result.disqualifier_code, result.rejection_reason,
                 result.ai_summary, user_id,
+                (listing.description or None),
             )
             if row:
                 return row["id"], True
@@ -293,3 +324,157 @@ async def get_latest_run(pool: asyncpg.Pool, *, user_id: str) -> Optional[dict]:
             "restarted). Start it again."
         )
     return data
+
+
+# ── Job applications ─────────────────────────────────────────────────────────
+#
+# The AI application agent (cover letter + merged original documents) persists
+# its result here so the user can close the review window and revisit it later.
+
+# Columns returned for the application metadata view (everything except the
+# heavy pdf_bytes blob, which is fetched separately by the /pdf endpoint).
+_APP_META_COLS = (
+    "id, user_id, match_id, status, cover_letter, manifest, feedback_history, "
+    "error, iterations, created_at, updated_at, (pdf_bytes IS NOT NULL) AS has_pdf"
+)
+
+
+def _app_row_to_dict(row: Optional[asyncpg.Record]) -> Optional[dict]:
+    """Normalise an application row, decoding JSONB text columns to Python."""
+    if row is None:
+        return None
+    data = dict(row)
+    for key in ("manifest", "feedback_history"):
+        val = data.get(key)
+        if isinstance(val, str):
+            try:
+                data[key] = json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                data[key] = None
+    return data
+
+
+async def get_match(pool: asyncpg.Pool, match_id: int, *, user_id: str) -> Optional[dict]:
+    """Fetch a single job match owned by the user.  # MUST SCOPE BY USER"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM job_matches WHERE id = $1 AND user_id = $2::uuid",
+            match_id, user_id,
+        )
+        return dict(row) if row else None
+
+
+async def create_or_reset_application(
+    pool: asyncpg.Pool, match_id: int, *, user_id: str
+) -> int:
+    """Open (or re-open) the application for a match, set to 'generating'.
+
+    Clears any previous pdf/error so a fresh generation starts cleanly, but
+    preserves the feedback_history.  Returns the application id.  # MUST SCOPE BY USER
+    """
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """
+            INSERT INTO job_applications (user_id, match_id, status)
+            VALUES ($1::uuid, $2, 'generating')
+            ON CONFLICT (user_id, match_id) DO UPDATE SET
+                status     = 'generating',
+                pdf_bytes  = NULL,
+                error      = NULL,
+                updated_at = NOW()
+            RETURNING id
+            """,
+            user_id, match_id,
+        )
+
+
+async def get_application(pool: asyncpg.Pool, app_id: int, *, user_id: str) -> Optional[dict]:
+    """Application metadata (no pdf bytes) by id.  # MUST SCOPE BY USER"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT {_APP_META_COLS} FROM job_applications "
+            "WHERE id = $1 AND user_id = $2::uuid",
+            app_id, user_id,
+        )
+        return _app_row_to_dict(row)
+
+
+async def get_application_by_match(
+    pool: asyncpg.Pool, match_id: int, *, user_id: str
+) -> Optional[dict]:
+    """Application metadata (no pdf bytes) for a match.  # MUST SCOPE BY USER"""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT {_APP_META_COLS} FROM job_applications "
+            "WHERE match_id = $1 AND user_id = $2::uuid",
+            match_id, user_id,
+        )
+        return _app_row_to_dict(row)
+
+
+async def get_application_pdf(
+    pool: asyncpg.Pool, app_id: int, *, user_id: str
+) -> Optional[bytes]:
+    """The merged application PDF bytes, or None if not ready.  # MUST SCOPE BY USER"""
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT pdf_bytes FROM job_applications "
+            "WHERE id = $1 AND user_id = $2::uuid",
+            app_id, user_id,
+        )
+        return bytes(val) if val is not None else None
+
+
+async def save_application_result(
+    pool: asyncpg.Pool,
+    app_id: int,
+    *,
+    user_id: str,
+    pdf: bytes,
+    cover_letter: str,
+    manifest: dict,
+    iterations: int,
+) -> None:
+    """Persist a finished application and mark it 'ready'.  # MUST SCOPE BY USER"""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE job_applications SET
+                status       = 'ready',
+                pdf_bytes    = $3,
+                cover_letter = $4,
+                manifest     = $5::jsonb,
+                iterations   = $6,
+                error        = NULL,
+                updated_at   = NOW()
+            WHERE id = $1 AND user_id = $2::uuid
+            """,
+            app_id, user_id, pdf, cover_letter,
+            json.dumps(manifest, ensure_ascii=False), iterations,
+        )
+
+
+async def fail_application(
+    pool: asyncpg.Pool, app_id: int, error: str, *, user_id: str
+) -> None:
+    """Mark an application 'failed' with a reason.  # MUST SCOPE BY USER"""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE job_applications SET status = 'failed', error = $3, "
+            "updated_at = NOW() WHERE id = $1 AND user_id = $2::uuid",
+            app_id, user_id, (error or "")[:2000],
+        )
+
+
+async def append_feedback(
+    pool: asyncpg.Pool, app_id: int, feedback: str, *, user_id: str
+) -> bool:
+    """Append a user feedback note to the application's history.  # MUST SCOPE BY USER"""
+    async with pool.acquire() as conn:
+        tag = await conn.execute(
+            "UPDATE job_applications SET "
+            "feedback_history = feedback_history || $3::jsonb, updated_at = NOW() "
+            "WHERE id = $1 AND user_id = $2::uuid",
+            app_id, user_id, json.dumps([feedback], ensure_ascii=False),
+        )
+        return tag == "UPDATE 1"

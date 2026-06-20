@@ -22,6 +22,7 @@ const COLUMNS: ColDef[] = [
   { label: 'Found',      field: 'run_timestamp',  sortable: true  },
   { label: 'Status',                              sortable: false },
   { label: 'AI summary',                          sortable: false },
+  { label: 'Apply',                               sortable: false },
 ]
 
 function headerClass(col: ColDef): Record<string, boolean> {

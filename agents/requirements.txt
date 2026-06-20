@@ -11,3 +11,4 @@ beautifulsoup4>=4.12.0
 lxml>=5.0.0
 uvicorn[standard]>=0.29.0
 reportlab>=4.0          # health PDF report (GET /api/health/report)
+pypdf>=4.0.0            # merge original CV/certificate PDFs into the job application

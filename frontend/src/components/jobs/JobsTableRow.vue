@@ -2,10 +2,17 @@
 import { ref } from 'vue'
 import type { JobMatch, JobStatus } from '../../types/jobs'
 import { useJobsStore } from '../../composables/useJobsStore'
+import ApplicationModal from './ApplicationModal.vue'
 
 const props = defineProps<{ match: JobMatch }>()
 
 const store = useJobsStore()
+const showApplication = ref(false)
+
+function onApplied(): void {
+  // The backend already set the match to 'applied'; reflect it locally.
+  props.match.status = 'applied'
+}
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 let errorTimer: ReturnType<typeof setTimeout> | null = null
@@ -134,7 +141,25 @@ async function onStatusChange(event: Event): Promise<void> {
       >{{ match.ai_summary }}</span>
       <span v-else class="no-summary">—</span>
     </td>
+
+    <!-- Apply -->
+    <td class="col-apply">
+      <button
+        class="apply-btn"
+        :aria-label="`Generate an application for ${match.title} at ${match.company}`"
+        @click="showApplication = true"
+      >
+        {{ match.status === 'applied' || match.status === 'interviewing' ? 'Review' : 'Apply' }}
+      </button>
+    </td>
   </tr>
+
+  <ApplicationModal
+    v-if="showApplication"
+    :match="match"
+    @close="showApplication = false"
+    @applied="onApplied"
+  />
 </template>
 
 <style scoped>
@@ -241,6 +266,22 @@ async function onStatusChange(event: Event): Promise<void> {
   margin-top: 2px;
   font-family: var(--font-mono);
 }
+
+/* Apply */
+.col-apply { white-space: nowrap; }
+.apply-btn {
+  background: var(--accent-primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm, 8px);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.apply-btn:hover { filter: brightness(1.06); }
+.apply-btn:focus { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 
 /* AI Summary */
 .col-summary { max-width: 280px; }

@@ -1,5 +1,14 @@
 import { requireAuth, refreshTokens, hasRefreshToken } from '../composables/useAuth'
-import type { MatchesResponse, RunResponse, RunReport, JobStatus, CountriesResponse } from '../types/jobs'
+import type {
+  MatchesResponse,
+  RunResponse,
+  RunReport,
+  JobStatus,
+  CountriesResponse,
+  JobApplication,
+  StartApplicationResponse,
+  ApplyResponse,
+} from '../types/jobs'
 import { API_BASE } from '../config/env'
 
 const BASE = API_BASE
@@ -79,4 +88,55 @@ export async function updateMatchStatus(id: number, status: JobStatus): Promise<
     body: JSON.stringify({ status }),
   })
   if (!res.ok) throw new Error(`Failed to update status: HTTP ${res.status}`)
+}
+
+// ── AI job applications ──────────────────────────────────────────────────────
+
+export async function startApplication(matchId: number): Promise<StartApplicationResponse> {
+  const res = await authFetch(`${BASE}/api/jobs/matches/${matchId}/application`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Failed to start application: HTTP ${res.status}`)
+  return res.json() as Promise<StartApplicationResponse>
+}
+
+/** The application for a match, or null if none has been generated yet. */
+export async function getApplicationByMatch(matchId: number): Promise<JobApplication | null> {
+  const res = await authFetch(`${BASE}/api/jobs/matches/${matchId}/application`)
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`Failed to load application: HTTP ${res.status}`)
+  return res.json() as Promise<JobApplication>
+}
+
+export async function getApplication(appId: number): Promise<JobApplication> {
+  const res = await authFetch(`${BASE}/api/jobs/applications/${appId}`)
+  if (!res.ok) throw new Error(`Failed to load application: HTTP ${res.status}`)
+  return res.json() as Promise<JobApplication>
+}
+
+/** Fetch the merged application PDF as a Blob (needs the auth header). */
+export async function getApplicationPdf(appId: number): Promise<Blob> {
+  const res = await authFetch(`${BASE}/api/jobs/applications/${appId}/pdf`)
+  if (!res.ok) throw new Error(`Failed to load PDF: HTTP ${res.status}`)
+  return res.blob()
+}
+
+export async function submitApplicationFeedback(
+  appId: number,
+  feedback: string,
+): Promise<StartApplicationResponse> {
+  const res = await authFetch(`${BASE}/api/jobs/applications/${appId}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify({ feedback }),
+  })
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try { detail = (await res.json()).detail ?? detail } catch { /* ignore */ }
+    throw new Error(`Failed to submit feedback: ${detail}`)
+  }
+  return res.json() as Promise<StartApplicationResponse>
+}
+
+export async function applyApplication(appId: number): Promise<ApplyResponse> {
+  const res = await authFetch(`${BASE}/api/jobs/applications/${appId}/apply`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Failed to mark applied: HTTP ${res.status}`)
+  return res.json() as Promise<ApplyResponse>
 }
