@@ -100,7 +100,10 @@ def _balance_net_for_month(text: str, month_str: str) -> float | None:
     return closing - opening
 
 
-def compute_financial_aggregates(statement_text: str) -> dict:
+def compute_financial_aggregates(
+    statement_text: str,
+    yearly_target: float | None = None,
+) -> dict:
     """Deterministically compute financial aggregates from raw bank statement text.
 
     Pure Python — no LLM involved. Splits the multi-month statement on
@@ -109,11 +112,19 @@ def compute_financial_aggregates(statement_text: str) -> dict:
     cross-validates each month's net against the statement's opening/closing
     'Kontostand' balances. When both are available and disagree, the balance
     delta wins — it is printed by the bank and immune to extraction noise.
+
+    Args:
+        statement_text: Raw concatenated statement text.
+        yearly_target: Annual savings goal in the statement's currency, read
+            from the user's brain.  When None (goal not set), all
+            goal-relative fields (remaining_target, pro_rated_target,
+            required_monthly_savings, trajectory) are omitted from the
+            returned dict and the LLM is instructed to skip savings-target
+            math rather than invent a number.
     """
     today         = date.today()
     current_year  = today.year
     current_month = today.month
-    yearly_target = 10_000.0
 
     parts = _SECTION_RE.split(statement_text)
     sections: dict[str, str] = {}
@@ -168,42 +179,46 @@ def compute_financial_aggregates(statement_text: str) -> dict:
     )
 
     net_savings_this_period = sum(monthly_nets.values())
-    remaining_target        = yearly_target - savings_ytd
     months_elapsed          = current_month
     months_remaining        = 12 - months_elapsed
-    pro_rated_target        = yearly_target * months_elapsed / 12
-    required_monthly_savings = (
-        remaining_target / months_remaining if months_remaining > 0 else 0.0
-    )
-
-    if pro_rated_target > 0:
-        variance_pct = (savings_ytd - pro_rated_target) / pro_rated_target
-        if variance_pct > 0.05:
-            trajectory = "ahead"
-        elif variance_pct < -0.05:
-            trajectory = "behind"
-        else:
-            trajectory = "on_track"
-    else:
-        trajectory = "on_track"
 
     valid = period_income > 0 or period_expenses > 0
 
-    return {
-        "valid":                    valid,
-        "total_income":             round(period_income, 2),
-        "total_expenses":           round(period_expenses, 2),
-        "net_savings_this_period":  round(net_savings_this_period, 2),
-        "monthly_nets":             {m: round(n, 2) for m, n in sorted(monthly_nets.items())},
-        "savings_ytd":              round(savings_ytd, 2),
-        "yearly_target":            yearly_target,
-        "remaining_target":         round(remaining_target, 2),
-        "trajectory":               trajectory,
-        "required_monthly_savings": round(required_monthly_savings, 2),
-        "pro_rated_target":         round(pro_rated_target, 2),
-        "months_elapsed":           months_elapsed,
-        "months_remaining":         months_remaining,
+    result: dict = {
+        "valid":                   valid,
+        "total_income":            round(period_income, 2),
+        "total_expenses":          round(period_expenses, 2),
+        "net_savings_this_period": round(net_savings_this_period, 2),
+        "monthly_nets":            {m: round(n, 2) for m, n in sorted(monthly_nets.items())},
+        "savings_ytd":             round(savings_ytd, 2),
+        "yearly_target":           yearly_target,   # None when goal not set
+        "months_elapsed":          months_elapsed,
+        "months_remaining":        months_remaining,
     }
+
+    if yearly_target is not None:
+        remaining_target         = yearly_target - savings_ytd
+        pro_rated_target         = yearly_target * months_elapsed / 12
+        required_monthly_savings = (
+            remaining_target / months_remaining if months_remaining > 0 else 0.0
+        )
+        if pro_rated_target > 0:
+            variance_pct = (savings_ytd - pro_rated_target) / pro_rated_target
+            if variance_pct > 0.05:
+                trajectory = "ahead"
+            elif variance_pct < -0.05:
+                trajectory = "behind"
+            else:
+                trajectory = "on_track"
+        else:
+            trajectory = "on_track"
+
+        result["remaining_target"]         = round(remaining_target, 2)
+        result["pro_rated_target"]         = round(pro_rated_target, 2)
+        result["required_monthly_savings"] = round(required_monthly_savings, 2)
+        result["trajectory"]               = trajectory
+
+    return result
 
 
 def validate_financial_json(result: dict, ground_truth: dict) -> dict:
@@ -229,14 +244,21 @@ def validate_financial_json(result: dict, ground_truth: dict) -> dict:
     result["spending_analysis"] = spending
 
     ytd = result.get("yearly_progress", {})
-    _override(ytd, "savings_ytd",              ground_truth["savings_ytd"])
-    _override(ytd, "remaining_target",         ground_truth["remaining_target"])
-    _override(ytd, "required_monthly_savings", ground_truth["required_monthly_savings"])
-    _override(ytd, "expected_savings_to_date", ground_truth["pro_rated_target"])
-    ytd["trajectory"]       = ground_truth["trajectory"]
-    ytd["on_track"]         = ground_truth["trajectory"] != "behind"
+    _override(ytd, "savings_ytd", ground_truth["savings_ytd"])
     ytd["months_elapsed"]   = ground_truth["months_elapsed"]
     ytd["months_remaining"] = ground_truth["months_remaining"]
+    # Goal-relative fields are only present when the user has set a savings goal.
+    if ground_truth.get("yearly_target") is not None:
+        _override(ytd, "remaining_target",         ground_truth["remaining_target"])
+        _override(ytd, "required_monthly_savings", ground_truth["required_monthly_savings"])
+        _override(ytd, "expected_savings_to_date", ground_truth["pro_rated_target"])
+        ytd["trajectory"] = ground_truth["trajectory"]
+        ytd["on_track"]   = ground_truth["trajectory"] != "behind"
+    else:
+        # No goal set: strip any goal-relative values the LLM may have invented.
+        for key in ("remaining_target", "required_monthly_savings",
+                    "expected_savings_to_date", "trajectory", "on_track"):
+            ytd.pop(key, None)
     result["yearly_progress"] = ytd
 
     return result
@@ -315,21 +337,18 @@ _ANALYSIS_TOOL_SPEC = {
                 "yearly_progress": {
                     "type": "object",
                     "properties": {
-                        "target_savings_eur":       {"type": "number"},
+                        "target_savings_eur":       {"type": ["number", "null"]},
                         "savings_ytd":              {"type": "number"},
-                        "remaining_target":         {"type": "number"},
+                        "remaining_target":         {"type": ["number", "null"]},
                         "months_elapsed":           {"type": "integer"},
                         "months_remaining":         {"type": "integer"},
-                        "expected_savings_to_date": {"type": "number"},
-                        "variance_from_expected":   {"type": "number"},
-                        "required_monthly_savings": {"type": "number"},
+                        "expected_savings_to_date": {"type": ["number", "null"]},
+                        "variance_from_expected":   {"type": ["number", "null"]},
+                        "required_monthly_savings": {"type": ["number", "null"]},
                         "trajectory":               {"type": "string", "enum": ["on_track", "ahead", "behind"]},
                         "on_track":                 {"type": "boolean"},
                     },
-                    "required": [
-                        "target_savings_eur", "savings_ytd", "remaining_target",
-                        "required_monthly_savings", "trajectory", "on_track",
-                    ],
+                    "required": ["savings_ytd"],
                 },
                 "budget_next_month": {
                     "type": "object",
@@ -539,8 +558,26 @@ You will call the submit_financial_analysis tool with all fields populated.
 # ── BankAdviser ────────────────────────────────────────────────────────────────
 
 class BankAdviser(BaseLLMService):
-    def analyse(self, statement: str, context: str = "", user_profile: str = "") -> dict:
-        ground_truth = compute_financial_aggregates(statement)
+    def analyse(
+        self,
+        statement: str,
+        context: str = "",
+        user_profile: str = "",
+        yearly_target: float | None = None,
+    ) -> dict:
+        """Run the full financial analysis pipeline.
+
+        Args:
+            statement: Concatenated bank statement text (one or more months).
+            context: Supplementary memory context from the user's brain.
+            user_profile: Plain-text user profile block from build_user_profile.
+            yearly_target: Annual savings goal in the statement's native currency,
+                read from the user's brain.  Pass None when the user has not yet
+                set a goal — goal-relative fields are then omitted from both the
+                pre-computed aggregates and the LLM prompt, so the model cannot
+                invent a number.
+        """
+        ground_truth = compute_financial_aggregates(statement, yearly_target=yearly_target)
         if ground_truth["valid"]:
             logger.info(
                 "Pre-computed ground truth: income=%.2f expenses=%.2f ytd=%.2f trajectory=%s",
@@ -555,7 +592,7 @@ class BankAdviser(BaseLLMService):
                 "LLM will derive totals from statement text."
             )
 
-        user_message = self._build_user_message(statement, context, ground_truth, user_profile)
+        user_message = self._build_user_message(statement, context, ground_truth, user_profile, yearly_target)
 
         result = invoke_with_tool_retry(
             client=self._client,
@@ -575,6 +612,7 @@ class BankAdviser(BaseLLMService):
         context: str,
         ground_truth: dict,
         user_profile: str = "",
+        yearly_target: float | None = None,
     ) -> str:
         parts: list[str] = []
 
@@ -592,8 +630,20 @@ class BankAdviser(BaseLLMService):
         if ground_truth.get("valid"):
             gt = ground_truth
             monthly_lines = "".join(
-                f"    {month}: {net:+.2f} EUR\n"
+                f"    {month}: {net:+.2f}\n"
                 for month, net in gt.get("monthly_nets", {}).items()
+            )
+            has_goal = gt.get("yearly_target") is not None
+            goal_lines = (
+                f"  yearly_target:                   {gt['yearly_target']:.2f}\n"
+                f"  remaining_target:                {gt['remaining_target']:.2f}\n"
+                f"  trajectory:                      {gt['trajectory']}\n"
+                f"  required_monthly_savings:        {gt['required_monthly_savings']:.2f}\n"
+                f"  expected_savings_to_date:        {gt['pro_rated_target']:.2f}\n"
+            ) if has_goal else (
+                "  yearly_target:                   NOT SET — omit all goal-relative "
+                "fields (remaining_target, required_monthly_savings, trajectory, "
+                "on_track) from yearly_progress; set target_savings_eur to null.\n"
             )
             parts.append(
                 "══════════════════════════════════════════\n"
@@ -602,15 +652,11 @@ class BankAdviser(BaseLLMService):
                 "Copy these exact values into the corresponding tool fields.\n"
                 "Do NOT re-sum or re-derive them from the transaction list.\n\n"
                 f"  net savings per month:\n{monthly_lines}"
-                f"  total_income (this period):      {gt['total_income']:.2f} EUR\n"
-                f"  total_expenses (this period):    {gt['total_expenses']:.2f} EUR\n"
-                f"  net_savings_this_period:         {gt['net_savings_this_period']:.2f} EUR\n"
-                f"  savings_ytd ({date.today().year}):           {gt['savings_ytd']:.2f} EUR\n"
-                f"  yearly_target:                   {gt['yearly_target']:.2f} EUR\n"
-                f"  remaining_target:                {gt['remaining_target']:.2f} EUR\n"
-                f"  trajectory:                      {gt['trajectory']}\n"
-                f"  required_monthly_savings:        {gt['required_monthly_savings']:.2f} EUR\n"
-                f"  expected_savings_to_date:        {gt['pro_rated_target']:.2f} EUR\n"
+                f"  total_income (this period):      {gt['total_income']:.2f}\n"
+                f"  total_expenses (this period):    {gt['total_expenses']:.2f}\n"
+                f"  net_savings_this_period:         {gt['net_savings_this_period']:.2f}\n"
+                f"  savings_ytd ({date.today().year}):           {gt['savings_ytd']:.2f}\n"
+                f"{goal_lines}"
                 f"  months_elapsed:                  {gt['months_elapsed']}\n"
                 f"  months_remaining:                {gt['months_remaining']}\n\n"
                 "Your tasks: categorise transactions, compute per-category spend,\n"

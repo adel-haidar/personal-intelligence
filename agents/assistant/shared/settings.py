@@ -28,8 +28,12 @@ class Settings(BaseSettings):
     bedrock_model_id: str = "eu.amazon.nova-2-lite-v1:0"
     """The Amazon Bedrock model ID used for the agents' LLM inference."""
 
-    user_name: str = "Adel"
-    """The name of the user the assistant is working for. Used in LLM prompts."""
+    user_name: str = ""
+    """The name of the user the assistant is working for. Used in LLM prompts.
+
+    Defaults to empty string — callers that inject this into prompts must handle the
+    empty case gracefully (e.g. omit "Hello, <name>" or fall back to "the user").
+    Set USER_NAME in the environment to override for a single-tenant deployment."""
 
     # Shared HS256 secret with Service A (same .env) — lets the agents verify
     # platform JWTs issued by the dashboard login.

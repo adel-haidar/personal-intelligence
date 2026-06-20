@@ -31,26 +31,31 @@ async def run_daily_health_workflow(
     """Fixed-order, non-agentic workflow. Steps run sequentially every time.
     # MUST SCOPE BY USER — all metric reads + the memory save are for `user_id`."""
 
-    # Step 1 — Compute today's summary (pure Python, no LLM)
-    summary = await compute_daily_summary(pool, target_date, user_id=user_id)
-
-    # Step 2 — Pull last 14 days for flag detection (pure Python, no LLM)
-    history = []
-    for i in range(1, 15):
-        past = target_date - timedelta(days=i)
-        history.append(await compute_daily_summary(pool, past, user_id=user_id))
-
-    flags = await detect_flags(pool, summary, history, user_id=user_id)
-
-    # Step 3 — Per-source data availability: did the scale / watch report today,
-    # and if not, when is new data expected? (pure Python, no LLM)
-    availability = await compute_source_availability(pool, target_date, user_id=user_id)
-
-    # Step 4 — Fetch medical records from MCP memory (titles are reported back
-    # to the caller as the list of documents the analysis is based on)
+    # Step 1 — Resolve the user's weight goal from their brain (must come before
+    # compute so goal-relative fields are populated correctly). None = no goal set.
+    weight_goal_kg: float | None = None
     medical_records: list[tuple[str, str]] = []
     user_profile = ""
+    memory_client = None
     if mcp_url and mcp_token:
+        from assistant.shared.memory_client import MemoryClient
+        from assistant.shared.user_profile import build_user_profile
+
+        memory_client = MemoryClient(
+            bedrock_client=bedrock_client,
+            model_id=model_id,
+            server_url=mcp_url,
+            token=mcp_token,
+        )
+        try:
+            weight_goal_kg = await memory_client.fetch_weight_goal()
+            if weight_goal_kg is not None:
+                logger.info("Weight goal resolved from brain: %.1f kg", weight_goal_kg)
+            else:
+                logger.info("No weight goal set in brain — goal-relative fields will be None")
+        except Exception:
+            logger.warning("Failed to fetch weight goal from brain", exc_info=True)
+
         try:
             medical_records = await fetch_medical_records(mcp_url, mcp_token)
         except Exception:
@@ -59,18 +64,28 @@ async def run_daily_health_workflow(
         # Build the per-user "ABOUT THE USER" block from the CALLER's own brain so
         # the coach reasons about this user (weight/goal/training), not the owner.
         try:
-            from assistant.shared.memory_client import MemoryClient
-            from assistant.shared.user_profile import build_user_profile
-
-            memory_client = MemoryClient(
-                bedrock_client=bedrock_client,
-                model_id=model_id,
-                server_url=mcp_url,
-                token=mcp_token,
-            )
             user_profile = await build_user_profile(memory_client, domain="health")
         except Exception:
             logger.warning("Failed to build user profile for health analysis", exc_info=True)
+
+    # Step 2 — Compute today's summary (pure Python, no LLM)
+    summary = await compute_daily_summary(
+        pool, target_date, user_id=user_id, weight_goal_kg=weight_goal_kg
+    )
+
+    # Step 3 — Pull last 14 days for flag detection (pure Python, no LLM)
+    history = []
+    for i in range(1, 15):
+        past = target_date - timedelta(days=i)
+        history.append(await compute_daily_summary(
+            pool, past, user_id=user_id, weight_goal_kg=weight_goal_kg
+        ))
+
+    flags = await detect_flags(pool, summary, history, user_id=user_id)
+
+    # Step 4 — Per-source data availability: did the scale / watch report today,
+    # and if not, when is new data expected? (pure Python, no LLM)
+    availability = await compute_source_availability(pool, target_date, user_id=user_id)
 
     # Step 5 — Generate analysis (single LLM call, temp=0, tool_use):
     # coach_insight + basic analysis + mandatory reasoning

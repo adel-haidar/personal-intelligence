@@ -227,11 +227,26 @@ async def analyse_bank_statement(req: AnalyseRequest, settings: SettingsDep, ide
 
     user_profile = await build_user_profile(memory_client, domain="banking")
 
+    # Read the user's annual savings goal from their brain.  The goal is stored
+    # as a memory containing the marker: ANNUAL_SAVINGS_GOAL=<number> <CURRENCY>
+    # (written by the frontend first-run popup).  When absent, yearly_target is
+    # None and goal-relative fields are omitted from the analysis rather than
+    # computed against a hardcoded default.
+    savings_goal = await memory_client.fetch_savings_goal()
+    yearly_target: float | None = savings_goal[0] if savings_goal else None
+    if savings_goal:
+        logger.info(
+            "User savings goal: %.2f %s", savings_goal[0], savings_goal[1]
+        )
+    else:
+        logger.info("No savings goal found in brain — goal-relative fields will be omitted")
+
     try:
         raw = bank_adviser.analyse(
             statement=statements_context,
             context=combined_context,
             user_profile=user_profile,
+            yearly_target=yearly_target,
         )
         result = BankAdviserResult.model_validate(raw)
     except Exception as exc:

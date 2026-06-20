@@ -555,11 +555,16 @@ def _build_pdf(
         else:
             trend_str = "—"
 
-        progress_str = (
-            f"{summary.progress_to_goal_kg:+.1f} kg to goal (73.0 kg)"
-            if summary.progress_to_goal_kg is not None
-            else "—"
-        )
+        if summary.progress_to_goal_kg is not None:
+            # weight_kg and progress_to_goal_kg are both set, so the goal is known
+            goal_kg = round((summary.weight_kg or 0) - summary.progress_to_goal_kg, 1)
+            progress_str = f"{summary.progress_to_goal_kg:+.1f} kg to goal ({goal_kg} kg)"
+        else:
+            # Either no weight data or no goal has been set in the user's brain
+            if summary.weight_kg is not None:
+                progress_str = "No goal set"
+            else:
+                progress_str = "—"
 
         metrics_data = [
             ["Metric", "Value"],

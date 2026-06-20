@@ -5,7 +5,7 @@ from typing import Optional
 import asyncpg
 
 from assistant.health.db import fetch_metrics, fetch_latest_metric, fetch_source_days
-from assistant.health.models import DailyHealthSummary, SourceAvailability, WEIGHT_GOAL_KG
+from assistant.health.models import DailyHealthSummary, SourceAvailability
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +36,34 @@ def _day_window(target_date: date, days_back: int) -> tuple[datetime, datetime]:
     return start, end
 
 
-async def compute_daily_summary(pool: asyncpg.Pool, target_date: date, *, user_id: str) -> DailyHealthSummary:
+async def compute_daily_summary(
+    pool: asyncpg.Pool,
+    target_date: date,
+    *,
+    user_id: str,
+    weight_goal_kg: Optional[float] = None,
+) -> DailyHealthSummary:
     """Compute health summary for a given date. All fields optional — never raises on missing data.
+
+    `weight_goal_kg` must be resolved from the caller's brain before calling this
+    function (see `MemoryClient.fetch_weight_goal`). When it is None, all
+    goal-relative fields (`progress_to_goal_kg`, `weeks_to_goal_at_current_rate`)
+    are also None — the pipeline never falls back to a hardcoded default.
     # MUST SCOPE BY USER"""
     try:
-        return await _compute(pool, target_date, user_id)
+        return await _compute(pool, target_date, user_id, weight_goal_kg=weight_goal_kg)
     except Exception:
         logger.exception("Failed to compute health summary for %s", target_date)
         return DailyHealthSummary(date=target_date)
 
 
-async def _compute(pool: asyncpg.Pool, target_date: date, user_id: str) -> DailyHealthSummary:
+async def _compute(
+    pool: asyncpg.Pool,
+    target_date: date,
+    user_id: str,
+    *,
+    weight_goal_kg: Optional[float] = None,
+) -> DailyHealthSummary:
     day_start = datetime(target_date.year, target_date.month, target_date.day,
                          0, 0, 0, tzinfo=timezone.utc)
     day_end = day_start + timedelta(days=1)
@@ -77,16 +94,18 @@ async def _compute(pool: asyncpg.Pool, target_date: date, user_id: str) -> Daily
         if slope_per_day is not None:
             weight_trend_kg_per_week = round(slope_per_day * 7, 3)
 
-    # Goal tracking
-    progress_to_goal_kg = round(weight_kg - WEIGHT_GOAL_KG, 2) if weight_kg is not None else None
+    # Goal tracking — requires a user-supplied goal (from the brain); never uses a hardcoded default.
+    # When weight_goal_kg is None (goal not set in brain) both fields are left as None.
+    progress_to_goal_kg: Optional[float] = None
     weeks_to_goal: Optional[float] = None
-    if (
-        progress_to_goal_kg is not None
-        and weight_trend_kg_per_week is not None
-        and weight_trend_kg_per_week < -0.01
-        and progress_to_goal_kg > 0
-    ):
-        weeks_to_goal = round(progress_to_goal_kg / abs(weight_trend_kg_per_week), 1)
+    if weight_kg is not None and weight_goal_kg is not None:
+        progress_to_goal_kg = round(weight_kg - weight_goal_kg, 2)
+        if (
+            weight_trend_kg_per_week is not None
+            and weight_trend_kg_per_week < -0.01
+            and progress_to_goal_kg > 0
+        ):
+            weeks_to_goal = round(progress_to_goal_kg / abs(weight_trend_kg_per_week), 1)
 
     # ── Body fat ────────────────────────────────────────────────────────────
 

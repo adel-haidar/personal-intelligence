@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -21,16 +21,18 @@ class SpendingAnalysis(_Flex):
 
 
 class YearlyProgress(_Flex):
-    target_savings_eur: float = 10_000.0
+    # None when the user has not set an annual savings goal in their brain.
+    # Goal-relative fields below are also None/absent in that case.
+    target_savings_eur: Optional[float] = None
     savings_ytd: float
-    remaining_target: float
+    remaining_target: Optional[float] = None
     months_elapsed: int | None = None
     months_remaining: int | None = None
     expected_savings_to_date: float | None = None
     variance_from_expected: float | None = None
-    required_monthly_savings: float
-    trajectory: str
-    on_track: bool
+    required_monthly_savings: Optional[float] = None
+    trajectory: Optional[str] = None
+    on_track: Optional[bool] = None
 
 
 class InvestmentSignal(_Flex):

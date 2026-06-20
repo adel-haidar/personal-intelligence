@@ -491,6 +491,69 @@ class MemoryClient(BaseLLMService):
             )
             return None
 
+    # Marker written by the frontend first-run popup into the user's brain.
+    # Format: ANNUAL_SAVINGS_GOAL=<positive number> <CURRENCY CODE>
+    # Example: ANNUAL_SAVINGS_GOAL=12000 EUR
+    _SAVINGS_GOAL_RE = re.compile(
+        r"ANNUAL_SAVINGS_GOAL=(\d+(?:\.\d+)?)\s+([A-Z]{3})"
+    )
+
+    async def fetch_savings_goal(self) -> tuple[float, str] | None:
+        """Read the user's annual savings goal from their brain.
+
+        The frontend first-run popup saves the goal as a plain-text memory
+        containing a machine-parseable marker line:
+            ANNUAL_SAVINGS_GOAL=<number> <CURRENCY>
+        e.g.  ANNUAL_SAVINGS_GOAL=12000 EUR
+
+        Searches the brain with a semantic query, then scans all returned
+        memory bodies for the marker regex.  Returns (amount, currency) if
+        found, or None if the goal has not been set yet.
+
+        This uses the same async HTTP + bearer-token pattern as _search so
+        the result is always scoped to the caller's own brain.
+        """
+        try:
+            text = await self._search("annual savings goal target")
+            if text:
+                m = self._SAVINGS_GOAL_RE.search(text)
+                if m:
+                    return float(m.group(1)), m.group(2)
+        except Exception:
+            logger.warning("fetch_savings_goal search failed", exc_info=True)
+        return None
+
+    # Marker written by the frontend first-run popup into the user's brain.
+    # Format: TARGET_WEIGHT_KG=<positive number>
+    # Example: TARGET_WEIGHT_KG=70
+    _WEIGHT_GOAL_MARKER_RE = re.compile(r"TARGET_WEIGHT_KG\s*=\s*([0-9]+(?:\.[0-9]+)?)")
+
+    async def fetch_weight_goal(self) -> float | None:
+        """Read the user's target weight goal from their brain.
+
+        The frontend first-run popup saves the goal as a plain-text memory
+        containing a machine-parseable marker line::
+
+            TARGET_WEIGHT_KG=<number>   e.g.  TARGET_WEIGHT_KG=70
+
+        Searches the brain with a semantic query, then scans returned memory
+        bodies for the marker regex. Returns the goal as a float (kg) if found,
+        or None if the goal has not been set yet — the caller must handle None
+        by omitting goal-relative output rather than inventing a default.
+
+        Uses the same async HTTP + bearer-token pattern as _search so the
+        result is always scoped to the caller's own brain.
+        """
+        try:
+            text = await self._search("target weight goal kg")
+            if text:
+                m = self._WEIGHT_GOAL_MARKER_RE.search(text)
+                if m:
+                    return float(m.group(1))
+        except Exception:
+            logger.warning("fetch_weight_goal search failed", exc_info=True)
+        return None
+
     async def save_job_run(
         self,
         date: str,

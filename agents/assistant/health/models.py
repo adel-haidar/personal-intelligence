@@ -17,8 +17,6 @@ METRIC_TYPE = Literal[
 
 SOURCE = Literal["apple_watch", "apple_health", "beurer_scale", "samsung_health", "manual"]
 
-WEIGHT_GOAL_KG = 73.0
-
 
 class HealthMetric(BaseModel):
     id: Optional[int] = None
@@ -43,7 +41,7 @@ class DailyHealthSummary(BaseModel):
     sleep_score: Optional[float] = None
     steps: Optional[int] = None
     active_energy_kcal: Optional[float] = None
-    progress_to_goal_kg: Optional[float] = None        # current - 73.0
+    progress_to_goal_kg: Optional[float] = None        # current weight minus target; None when goal unknown
     weeks_to_goal_at_current_rate: Optional[float] = None
 
 
