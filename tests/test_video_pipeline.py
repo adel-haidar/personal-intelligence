@@ -18,7 +18,11 @@ from private_internet.content.video_generator import (
 )
 from private_internet.content.polly_engine import PollyEngine, NON_NEURAL_VOICES
 from private_internet.content.ffmpeg_assembler import VideoAssembler, VideoAssemblyError
-from private_internet.content.jobs.video_job import generate_video, generate_videos_batch
+from private_internet.content.jobs.video_job import (
+    generate_video,
+    generate_videos_batch,
+    _section_visual,
+)
 
 
 # ── Fixtures ───────────────────────────────────────────────────
@@ -429,3 +433,172 @@ class TestGenerateVideo:
         # Scheduled feed uses the standard long-form WAN band (3–5 min).
         assert mock_gen.call_args == call("t-1", user_id="u1", duration_band="standard")
         assert result["created"] == ["video-1"]
+
+
+# ── SIGNAL provider routing guard ──────────────────────────────
+# These tests assert the hard constraint: SIGNAL must NEVER call
+# generate_video_clip (Kling/fal.ai) for clip generation, regardless of the
+# VIDEO_BACKEND setting.
+
+class TestSignalNeverCallsKling:
+    """_section_visual with content_type='signal' must NEVER call generate_video_clip
+    (the Kling/fal client) — even when VIDEO_BACKEND=fal and a translated scene
+    is present.  get_provider('signal') == 'wan2', so the kling gate is closed.
+    """
+
+    @pytest.mark.anyio
+    async def test_signal_section_visual_skips_kling_clip_with_fal_backend(self, tmp_path):
+        """When content_type='signal' and VIDEO_BACKEND='fal', _section_visual must
+        return a slide image (.png) and must NOT call generate_video_clip (Kling)."""
+        from types import SimpleNamespace
+        from private_internet.content.video_generator import VideoImageGenerator
+
+        image_gen = MagicMock()
+        image_gen.generate_for_section = AsyncMock(return_value=b"png-slide")
+
+        # A translated scene that would normally trigger a Kling clip
+        fake_scene = {"kling_prompt": "a filmable scene", "duration": 5, "mood": "calm"}
+        section = MagicMock()
+
+        base = "private_internet.content.jobs.video_job"
+        with patch(f"{base}.get_settings",
+                   return_value=SimpleNamespace(video_backend="fal")), \
+             patch(f"{base}.generate_video_clip", new=AsyncMock()) as mock_kling, \
+             patch(f"{base}.build_final_prompt", return_value="translated prompt"), \
+             patch(f"{base}.kling_duration", return_value=5):
+
+            path = await _section_visual(
+                image_gen, section, {"name": "creator"}, 0, "Title", str(tmp_path),
+                scene=fake_scene,
+                content_type="signal",
+            )
+
+        # Kling MUST NOT be called for SIGNAL content
+        mock_kling.assert_not_called()
+        # A slide image was generated instead
+        image_gen.generate_for_section.assert_awaited_once()
+        assert path.endswith(".png")
+
+    @pytest.mark.anyio
+    async def test_signal_section_visual_skips_kling_clip_with_slides_backend(self, tmp_path):
+        """With VIDEO_BACKEND='slides' (default), _section_visual must also skip Kling."""
+        from types import SimpleNamespace
+
+        image_gen = MagicMock()
+        image_gen.generate_for_section = AsyncMock(return_value=b"png-slide")
+        fake_scene = {"kling_prompt": "a filmable scene", "duration": 5, "mood": "calm"}
+        section = MagicMock()
+
+        base = "private_internet.content.jobs.video_job"
+        with patch(f"{base}.get_settings",
+                   return_value=SimpleNamespace(video_backend="slides")), \
+             patch(f"{base}.generate_video_clip", new=AsyncMock()) as mock_kling:
+
+            path = await _section_visual(
+                image_gen, section, {"name": "creator"}, 1, "Title", str(tmp_path),
+                scene=fake_scene,
+                content_type="signal",
+            )
+
+        mock_kling.assert_not_called()
+        image_gen.generate_for_section.assert_awaited_once()
+        assert path.endswith(".png")
+
+    @pytest.mark.anyio
+    async def test_generate_video_legacy_never_calls_kling_for_signal(self):
+        """generate_video() (the legacy 5-section pipeline) must not call
+        generate_video_clip (Kling) for SIGNAL content even when VIDEO_BACKEND=fal.
+        Asserts the fix in the generate_video caller that passes content_type='signal'
+        to _section_visual."""
+        from types import SimpleNamespace
+
+        conn, executed = _recording_conn()
+        script = _script()
+
+        script_gen = MagicMock()
+        script_gen.generate = AsyncMock(return_value=script)
+
+        image_gen = MagicMock()
+        image_gen.generate_for_section = AsyncMock(return_value=b"png-bytes")
+        image_gen.generate_thumbnail = AsyncMock(return_value=b"thumb-bytes")
+
+        polly = MagicMock()
+        polly.synthesize_section.return_value = 10000
+
+        assembler = MagicMock()
+        assembler.assemble.return_value = 60
+
+        asset_store = MagicMock()
+        asset_store.upload_video.return_value = "https://cdn/video.mp4"
+        asset_store.upload_thumbnail.return_value = "https://cdn/thumb.png"
+
+        selector = MagicMock()
+        selector.select_for_topic.return_value = _creator()
+
+        # Provide a fake translated scene to trigger the visual path
+        fake_scene = {"kling_prompt": "translated", "duration": 5, "mood": "calm"}
+
+        base = "private_internet.content.jobs.video_job"
+        patches = [
+            patch(f"{base}._connect", return_value=conn),
+            patch(f"{base}._select_topic", return_value=_topic()),
+            patch(f"{base}._fetch_research", return_value=[]),
+            patch(f"{base}.CreatorSelector", return_value=selector),
+            patch(f"{base}.VideoScriptGenerator", return_value=script_gen),
+            patch(f"{base}.VideoImageGenerator", return_value=image_gen),
+            patch(f"{base}.get_tts_engine", return_value=polly),
+            # VIDEO_BACKEND=fal so the Kling path would be triggered WITHOUT the fix
+            patch(f"{base}.get_settings", return_value=SimpleNamespace(video_backend="fal")),
+            patch(f"{base}.VideoAssembler", return_value=assembler),
+            patch(f"{base}.AssetStore", return_value=asset_store),
+            patch(f"{base}.resolve_user_language", return_value="en"),
+            # The visual translator returns a scene for each of the 5 sections
+            patch(f"{base}.translate_scenes", new=AsyncMock(
+                return_value=[fake_scene] * len(script.sections)
+            )),
+            patch(f"{base}.build_final_prompt", return_value="final prompt"),
+            patch(f"{base}.kling_duration", return_value=5),
+            patch(f"{base}.shutil.rmtree"),
+        ]
+
+        mock_kling = AsyncMock(return_value=b"kling-bytes")
+        patches.append(patch(f"{base}.generate_video_clip", new=mock_kling))
+
+        for p in patches:
+            p.start()
+        try:
+            await generate_video(user_id="test-user")
+        finally:
+            for p in patches:
+                p.stop()
+
+        # The critical assertion: Kling was NEVER called even with VIDEO_BACKEND=fal
+        # and a translated scene present, because content_type='signal' routes to wan2.
+        mock_kling.assert_not_called()
+        # Slide images were used for all sections instead
+        assert image_gen.generate_for_section.await_count == len(script.sections)
+
+    def test_signal_provider_is_wan2(self):
+        """Regression: get_provider('signal') must always return 'wan2'."""
+        from private_internet.content.video_provider import get_provider
+        assert get_provider("signal") == "wan2"
+
+    @pytest.mark.anyio
+    async def test_generate_videos_batch_calls_generate_long_video_not_legacy(self):
+        """generate_videos_batch must call generate_long_video (WAN-routed), not
+        the legacy generate_video (Kling path)."""
+        mock_long = AsyncMock(return_value="vid-1")
+        mock_legacy = AsyncMock()
+
+        with patch(
+            "private_internet.content.jobs.video_job.feature_enabled_for_user", return_value=True
+        ), patch(
+            "private_internet.content.jobs.video_job.generate_long_video", new=mock_long
+        ), patch(
+            "private_internet.content.jobs.video_job.generate_video", new=mock_legacy
+        ):
+            result = await generate_videos_batch(count=1, user_id="u1")
+
+        mock_long.assert_awaited_once()
+        mock_legacy.assert_not_called()
+        assert result["created"] == ["vid-1"]

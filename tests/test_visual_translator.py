@@ -208,8 +208,11 @@ class TestSectionVisualSendsTranslatedPrompt:
         ), patch(
             "private_internet.content.jobs.video_job.generate_video_clip", new=clip_mock
         ):
+            # content_type="stories" routes to Kling (get_provider -> "kling"),
+            # the only path that still sends prompts to the fal/Kling client.
             path = await _section_visual(
-                image_gen, section, {"name": "c"}, 0, "title", str(tmp_path), scene
+                image_gen, section, {"name": "c"}, 0, "title", str(tmp_path), scene,
+                content_type="stories",
             )
 
         sent_prompt = clip_mock.call_args.args[0]

@@ -173,9 +173,13 @@ async def _generate_bootstrap_content(user_id: str) -> None:
         logger.warning("%s bootstrap posts failed: %s", _log_prefix(user_id), e)
 
     try:
-        from private_internet.content.jobs.video_job import generate_video
+        # Use generate_long_video (WAN-routed via video_provider.get_provider) rather
+        # than the legacy generate_video() which hardcoded fal/Kling for clips.
+        # "short" band (~5 clips, ~40s) keeps bootstrap cost low while exercising
+        # the full WAN pipeline on new-user provisioning.
+        from private_internet.content.jobs.video_job import generate_long_video
 
-        await generate_video(user_id=user_id)
+        await generate_long_video(user_id=user_id, duration_band="short")
     except Exception as e:
         logger.warning("%s bootstrap video failed: %s", _log_prefix(user_id), e)
 

@@ -21,6 +21,7 @@ from private_internet.content.video_generator import (
 )
 from private_internet.content.elevenlabs_engine import ElevenLabsEngine, get_tts_engine
 from private_internet.content.fal_video import generate_video_clip
+from private_internet.content.video_provider import get_provider
 from private_internet.content.voice_config import get_voice_id
 from private_internet.content.user_language import resolve_user_language
 from private_internet.content.ffmpeg_assembler import VideoAssembler
@@ -39,18 +40,26 @@ SIGNAL_TARGET_DURATION_S = 100
 
 
 async def _section_visual(
-    image_generator, section, creator, idx, title, work_dir, scene=None
+    image_generator, section, creator, idx, title, work_dir, scene=None,
+    content_type: str = "signal",
 ) -> str:
     """Per-section visual path: a generated fal video clip (.mp4) when
-    VIDEO_BACKEND=fal AND a translated scene prompt is available, else a still
-    image (.png). Any fal failure (incl. unfunded balance) falls back to a slide
-    image, so the video always assembles.
+    VIDEO_BACKEND=fal AND a translated scene prompt is available AND the
+    content_type's primary provider is 'kling', else a still image (.png).
+    Any fal failure (incl. unfunded balance) falls back to a slide image,
+    so the video always assembles.
 
     `scene` is a translated scene dict from the visual translation layer. Only
     its concrete `kling_prompt` (with the house style suffix) is ever sent to
     Kling — the abstract topic/script text never is. When no translated scene
-    exists for this section we skip Kling entirely and render a slide."""
-    if scene and (get_settings().video_backend or "slides").lower() == "fal":
+    exists for this section we skip Kling entirely and render a slide.
+
+    The Kling (fal) path is gated on `get_provider(content_type) == "kling"`:
+    SIGNAL and PULSE are routed to WAN2 and must NEVER call generate_video_clip
+    (Kling), even when VIDEO_BACKEND=fal.  Only STORIES (provider='kling') may
+    enter the fal path here."""
+    provider = get_provider(content_type)
+    if scene and provider == "kling" and (get_settings().video_backend or "slides").lower() == "fal":
         try:
             prompt = build_final_prompt(scene)
             clip = await generate_video_clip(
@@ -224,11 +233,14 @@ async def generate_video(topic_id: str | None = None, *, user_id: str) -> str:
         scenes_by_section = await _translate_scenes_for_script(topic, script)
 
         # 5/6. Per-section visuals (fal video clip, or slide fallback) + thumbnail.
+        # content_type="signal" ensures get_provider() gates the Kling path — SIGNAL
+        # must never call generate_video_clip (Kling) regardless of VIDEO_BACKEND.
         visual_results = await asyncio.gather(
             *(
                 _section_visual(
                     image_generator, s, creator, i, script.title, work_dir,
                     scenes_by_section[i],
+                    content_type="signal",
                 )
                 for i, s in enumerate(script.sections)
             ),
