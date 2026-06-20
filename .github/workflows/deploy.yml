@@ -47,6 +47,8 @@ jobs:
               \"sudo -u ${{ secrets.EC2_USER }} bash -c 'cd ~/personal-intelligence && git fetch origin main && git reset --hard origin/main'\",
               \"echo ==> Installing dependencies...\",
               \"sudo -u ${{ secrets.EC2_USER }} bash -c 'cd ~/personal-intelligence && source .venv/bin/activate && pip install -e . --quiet && pip install -r agents/requirements.txt --quiet'\",
+              \"echo ==> Installing agents service dependencies into its own venv...\",
+              \"sudo -u ${{ secrets.EC2_USER }} bash -c 'cd ~/personal-intelligence/agents && .venv/bin/pip install -r requirements.txt --quiet'\",
               \"echo '==> Deploying systemd units - names unchanged, contents reference the private_internet package...'\",
               \"cp /home/${{ secrets.EC2_USER }}/personal-intelligence/systemd/personal-intelligence-api.service /etc/systemd/system/personal-intelligence-api.service\",
               \"cp /home/${{ secrets.EC2_USER }}/personal-intelligence/systemd/personal-intelligence-agents.service /etc/systemd/system/personal-intelligence-agents.service\",
