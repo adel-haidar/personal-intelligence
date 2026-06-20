@@ -122,6 +122,58 @@ def init_content_db() -> None:
         "CREATE INDEX IF NOT EXISTS idx_creators_user_id ON content_creators(user_id)"
     )
 
+    # Migration 0022: remove the five owner-flavoured legacy global personas
+    # (Felix Bergmann, Dr. Layla Nasser, Maksim Volkov, Nora Chen,
+    # Viktor Ostrowski) that were seeded in the single-user era and leaked
+    # owner identity into every user's PULSE feed. Dependent posts, videos, and
+    # interaction rows are removed first to satisfy FK constraints.
+    # Idempotent: DELETE WHERE is a no-op when the rows are already gone.
+    _LEGACY_SLUGS = (
+        "maksim-volkov",
+        "dr-layla-nasser",
+        "felix-bergmann",
+        "nora-chen",
+        "viktor-ostrowski",
+    )
+    cur.execute(
+        "SELECT id FROM content_creators WHERE user_id IS NULL AND slug = ANY(%s)",
+        (_LEGACY_SLUGS,),
+    )
+    legacy_ids = [r[0] for r in cur.fetchall()]
+    if legacy_ids:
+        cur.execute(
+            "SELECT id FROM content_posts WHERE creator_id = ANY(%s)",
+            (legacy_ids,),
+        )
+        legacy_post_ids = [r[0] for r in cur.fetchall()]
+        cur.execute(
+            "SELECT id FROM content_videos WHERE creator_id = ANY(%s)",
+            (legacy_ids,),
+        )
+        legacy_video_ids = [r[0] for r in cur.fetchall()]
+        if legacy_post_ids:
+            cur.execute(
+                "DELETE FROM content_interactions WHERE content_type = 'post' AND content_id = ANY(%s)",
+                (legacy_post_ids,),
+            )
+            cur.execute(
+                "DELETE FROM content_posts WHERE creator_id = ANY(%s)",
+                (legacy_ids,),
+            )
+        if legacy_video_ids:
+            cur.execute(
+                "DELETE FROM content_interactions WHERE content_type = 'video' AND content_id = ANY(%s)",
+                (legacy_video_ids,),
+            )
+            cur.execute(
+                "DELETE FROM content_videos WHERE creator_id = ANY(%s)",
+                (legacy_ids,),
+            )
+        cur.execute(
+            "DELETE FROM content_creators WHERE user_id IS NULL AND slug = ANY(%s)",
+            (_LEGACY_SLUGS,),
+        )
+
     conn.commit()
     cur.close()
     conn.close()

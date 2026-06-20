@@ -25,16 +25,10 @@ ALL_TONES = ["informative", "satirical", "supportive", "critical"]
 # does not carry a `valid_tones` list (e.g. the old global defaults).
 # Per-user generated personas store their valid_tones in the DB row itself.
 _TONE_MAP: dict[str, list[str]] = {
-    # Global basics
+    # Global neutral basics (user_id IS NULL in content_creators)
     "global-science-desk": ["informative", "critical"],
     "world-sport-desk": ["supportive", "informative"],
     "curious-mind": ["informative", "supportive"],
-    # Legacy slugs kept so existing DB rows still get sensible tones
-    "maksim-volkov": ["satirical", "critical"],
-    "dr-layla-nasser": ["informative", "critical"],
-    "felix-bergmann": ["satirical", "supportive"],
-    "nora-chen": ["supportive", "informative"],
-    "viktor-ostrowski": ["satirical"],
 }
 
 # How much each affinity keyword hit contributes to the selection score.
