@@ -20,11 +20,13 @@ import DeviceCard from '../components/ui/DeviceCard.vue'
 import ConfirmModal from '../components/ui/ConfirmModal.vue'
 import ShareButton from '../components/ui/ShareButton.vue'
 import HealthExportGuide from '../components/health/HealthExportGuide.vue'
+import GoalPrompt from '../components/GoalPrompt.vue'
 import { useHealthDaily, useHealthTrends, useAppleHealthImport, useSamsungHealthImport, useHealthStatus } from '../composables/useHealth'
 import { requireAuth } from '../composables/useAuth'
 import { API_BASE } from '../config/env'
 import { useToast } from '../components/ui/useToast'
 import { useI18n } from '../i18n/index'
+import { checkWeightGoal, saveWeightGoal, useWeightGoal } from '../composables/useGoal'
 import type { User } from '../types/user'
 
 Chart.register(
@@ -42,6 +44,28 @@ const { status: samsungImportStatus, error: samsungImportError, uploadFile: uplo
 const { data: healthStatus, fetchStatus } = useHealthStatus()
 const toast = useToast()
 const { t } = useI18n()
+const { weightGoal } = useWeightGoal()
+
+// ── Goal prompt ───────────────────────────────────────────────────────────────
+const goalPromptOpen = ref(false)
+const goalSaving = ref(false)
+const goalError = ref('')
+
+async function onSaveWeightGoal(payload: { kg?: number }) {
+  if (!payload.kg) return
+  goalSaving.value = true
+  goalError.value = ''
+  try {
+    await saveWeightGoal(payload.kg)
+    goalPromptOpen.value = false
+    // Rebuild chart to include the new goal line
+    if (chartsOpen.value) nextTick(buildCharts)
+  } catch {
+    goalError.value = 'Could not save your goal — please try again.'
+  } finally {
+    goalSaving.value = false
+  }
+}
 
 const today = new Date().toISOString().slice(0, 10)
 // The date we currently show analysis for — moves to the latest imported day.
@@ -339,11 +363,15 @@ function buildCharts() {
     const labels = wData.map(p => p.date.slice(5))
     const weights = wData.map(p => p.value)
     const avg7: (number | null)[] = weights.map((_, i) => { if (i < 6) return null; const sl = weights.slice(i - 6, i + 1); return sl.reduce((s, v) => s + v, 0) / sl.length })
-    chartWeight = new Chart(chartWeightRef.value, { type: 'line', data: { labels, datasets: [
+    const goalKg = weightGoal.value
+    const weightDatasets: ChartConfiguration<'line'>['data']['datasets'] = [
       { label: 'Weight', data: weights, borderColor: accent, borderWidth: 1.5, pointRadius: 2, pointBackgroundColor: accent, fill: false, tension: 0.3, spanGaps: true },
       { label: '7-day avg', data: avg7, borderColor: amber, borderWidth: 2, pointRadius: 0, fill: false, tension: 0.4, spanGaps: true },
-      { label: 'Goal 73kg', data: labels.map(() => 73), borderColor: success, borderDash: [4, 4], borderWidth: 1.5, pointRadius: 0, fill: false },
-    ] }, options: { ...BASE_OPTS, scales: makeScales('kg'), plugins: { legend: { display: false }, tooltip: { ...tooltipDefaults(), callbacks: { label: (c) => ` ${c.dataset.label}: ${typeof c.parsed.y === 'number' ? c.parsed.y.toFixed(1) : '—'} kg` } } } } } as ChartConfiguration<'line'>)
+    ]
+    if (goalKg !== null) {
+      weightDatasets.push({ label: `Goal ${goalKg} kg`, data: labels.map(() => goalKg), borderColor: success, borderDash: [4, 4], borderWidth: 1.5, pointRadius: 0, fill: false } as any)
+    }
+    chartWeight = new Chart(chartWeightRef.value, { type: 'line', data: { labels, datasets: weightDatasets }, options: { ...BASE_OPTS, scales: makeScales('kg'), plugins: { legend: { display: false }, tooltip: { ...tooltipDefaults(), callbacks: { label: (c) => ` ${c.dataset.label}: ${typeof c.parsed.y === 'number' ? c.parsed.y.toFixed(1) : '—'} kg` } } } } } as ChartConfiguration<'line'>)
   }
   if (chartHrRef.value) {
     const d = (series['resting_hr'] ?? []).slice(-14)
@@ -535,6 +563,10 @@ onMounted(async () => {
   if (latest) activeDate.value = latest
   fetchDaily(activeDate.value)
   fetchTrends(trendDays.value, activeDate.value)
+
+  // Show goal-capture modal if the brain doesn't already have a weight goal.
+  const existing = await checkWeightGoal()
+  if (existing === null) goalPromptOpen.value = true
 })
 </script>
 
@@ -627,9 +659,16 @@ onMounted(async () => {
                 <PIIcon :name="trendIcon" :size="16" /><span class="t-mono">{{ fmtTrend(trend) }}</span>
               </div>
             </div>
-            <div v-if="daily?.summary.progress_to_goal_kg != null">
-              <div class="t-secondary" style="font-size: var(--text-sm); margin-bottom: 4px;">To goal (73 kg)</div>
+            <div v-if="daily?.summary.progress_to_goal_kg != null && weightGoal !== null">
+              <div class="t-secondary" style="font-size: var(--text-sm); margin-bottom: 4px;">To goal ({{ weightGoal }} kg)</div>
               <StatusPill :kind="(daily?.summary.progress_to_goal_kg ?? 1) <= 0 ? 'good' : 'watch'">{{ fmtKg(daily?.summary.progress_to_goal_kg) }}</StatusPill>
+            </div>
+            <div v-else-if="daily?.summary.progress_to_goal_kg == null && weightGoal === null">
+              <div class="t-secondary" style="font-size: var(--text-sm); margin-bottom: 4px;">Weight goal</div>
+              <button
+                style="font-size: var(--text-sm); color: var(--accent-primary); background: none; border: none; cursor: pointer; padding: 0; font-family: var(--font-body);"
+                @click="goalPromptOpen = true"
+              >Set a goal</button>
             </div>
           </div>
         </InsightCard>
@@ -714,6 +753,15 @@ onMounted(async () => {
   </Teleport>
 
   <HealthExportGuide :open="guideOpen" :platform="guidePlatform" @close="guideOpen = false" @update:platform="guidePlatform = $event" />
+
+  <GoalPrompt
+    kind="weight"
+    :open="goalPromptOpen"
+    :saving="goalSaving"
+    :error="goalError"
+    @close="goalPromptOpen = false"
+    @save="onSaveWeightGoal"
+  />
 
   <ConfirmModal
     :open="confirmDel" danger confirmLabel="Delete all health data"

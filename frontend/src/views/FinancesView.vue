@@ -16,15 +16,41 @@ import PeriodControls from '../components/finances/PeriodControls.vue'
 import SpendingBudgetPanel from '../components/finances/SpendingBudgetPanel.vue'
 import InvestingPanel from '../components/finances/InvestingPanel.vue'
 import DayTradingPanel from '../components/finances/DayTradingPanel.vue'
+import GoalPrompt from '../components/GoalPrompt.vue'
 import { useBankAdviser, type AnalysisParams } from '../composables/useBankAdviser'
 import { requireAuth } from '../composables/useAuth'
 import { API_BASE } from '../config/env'
 import { useToast } from '../components/ui/useToast'
+import { checkSavingsGoal, saveSavingsGoal } from '../composables/useGoal'
 
 const { status, result, error, lastRun, runAnalysis, loadLatest } = useBankAdviser()
 const toast = useToast()
 
-onMounted(() => loadLatest())
+// ── Goal prompt ───────────────────────────────────────────────────────────────
+const goalPromptOpen = ref(false)
+const goalSaving = ref(false)
+const goalError = ref('')
+
+async function onSaveSavingsGoal(payload: { amount?: number; currency?: string }) {
+  if (!payload.amount || !payload.currency) return
+  goalSaving.value = true
+  goalError.value = ''
+  try {
+    await saveSavingsGoal(payload.amount, payload.currency)
+    goalPromptOpen.value = false
+  } catch {
+    goalError.value = 'Could not save your goal — please try again.'
+  } finally {
+    goalSaving.value = false
+  }
+}
+
+onMounted(async () => {
+  loadLatest()
+  // Show goal-capture modal if no savings goal is set in the brain.
+  const existing = await checkSavingsGoal()
+  if (existing === null) goalPromptOpen.value = true
+})
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 const TABS = [
@@ -36,6 +62,13 @@ const TABS = [
 const activeTab = ref<'overview' | 'spending' | 'investments' | 'trading'>('overview')
 
 const populated = computed(() => status.value === 'success' && !!result.value)
+
+// SAVINGS_TARGET: a generic financial-guidance figure (not owner-specific).
+// 20% is the broadly-cited "50/30/20" rule recommended by most personal-finance
+// authorities. It is NOT hardcoded per-user — it is the benchmark shown when no
+// personalised goal is set. When the user has set an annual savings goal in their
+// brain, the ProgressBar still uses this rate benchmark for the % gauge, but the
+// goal amount is shown as context. Keeping this as a constant is correct behaviour.
 const SAVINGS_TARGET = 20
 
 // ── Currency / formatting ─────────────────────────────────────────────────────
@@ -299,5 +332,14 @@ async function deleteAll() {
     body="This permanently removes every financial file and the insights drawn from them. Your brain keeps everything else. This cannot be undone."
     @close="confirmDel = false"
     @confirm="deleteAll"
+  />
+
+  <GoalPrompt
+    kind="savings"
+    :open="goalPromptOpen"
+    :saving="goalSaving"
+    :error="goalError"
+    @close="goalPromptOpen = false"
+    @save="onSaveSavingsGoal"
   />
 </template>
