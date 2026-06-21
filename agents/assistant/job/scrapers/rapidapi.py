@@ -12,13 +12,18 @@ logger = logging.getLogger(__name__)
 
 
 class RapidApiScraper(BaseScraper):
-    """Searches LinkedIn jobs via the JSearch API on RapidAPI.
+    """Searches jobs via the JSearch API on RapidAPI.
+
+    JSearch aggregates Google for Jobs — i.e. many boards (LinkedIn, Indeed,
+    Glassdoor, jobs.ch, GaijinPot, …) — so each listing's real source is taken
+    from its `job_publisher`, NOT this scraper. `name` is only used for logging
+    and error messages.
 
     Docs: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
     Host header: jsearch.p.rapidapi.com (default) or configure via RAPIDAPI_HOST.
     """
 
-    name = "LinkedIn"
+    name = "JSearch"
 
     def __init__(
         self,
@@ -109,7 +114,7 @@ class RapidApiScraper(BaseScraper):
 
             listings.append(
                 JobListing(
-                    platform=publisher or "LinkedIn",
+                    platform=publisher or "Other",
                     title=item.get("job_title") or "",
                     company=item.get("employer_name") or "",
                     location=location,

@@ -236,8 +236,11 @@ async def run_agent(
                 try:
                     results = await scraper.search(query, code, city)
                     all_raw.extend(results)
-                    if results:
-                        platforms_used.add(scraper.name)
+                    # Report the ACTUAL boards the listings came from (JSearch
+                    # aggregates many publishers), not the scraper's class name —
+                    # otherwise every run looks like it only used "LinkedIn".
+                    for r in results:
+                        platforms_used.add(r.platform)
                 except ScraperError as exc:
                     # A real source failure (quota/key/5xx) — remember the reason
                     # so an empty run can explain itself instead of saying "0".
