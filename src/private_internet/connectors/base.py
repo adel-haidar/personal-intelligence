@@ -31,6 +31,15 @@ class Item:
     content: str              # plain-text content to embed
     source_url: str | None = None
     modified_at: datetime | None = None
+    # When the item is a real file (e.g. a CV PDF in Google Drive), the provider
+    # may supply the original bytes + filename. The import pipeline then persists
+    # the binary to the user's upload dir and tags the memory `file-upload`, so
+    # downstream consumers that need the original file — notably the job-hunt
+    # agent merging a CV into an application — can find and attach it, exactly as
+    # if it had been uploaded via POST /api/file. Leave None for text-only items
+    # (Notion pages, GitHub READMEs).
+    raw_bytes: bytes | None = None
+    filename: str | None = None   # original filename incl. extension
 
 
 @dataclass

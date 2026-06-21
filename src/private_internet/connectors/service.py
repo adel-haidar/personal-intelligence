@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 
@@ -164,6 +165,24 @@ def _chunk_text(text: str) -> list[str]:
     return chunks
 
 
+# ── File persistence (mirrors memory/routes.py _save_uploaded_file) ──────────
+
+def _save_binary(user_id: str, filename: str, data: bytes) -> str:
+    """Persist an imported file's original bytes to the user's upload dir using
+    the same `{sha256[:12]}_{filename}` naming as POST /api/file, so the job-hunt
+    agent's document discovery (which globs that dir + matches by filename) picks
+    it up and can merge the original into an application. Returns the disk path."""
+    from private_internet.config import get_settings
+
+    user_dir = os.path.join(get_settings().upload_dir, user_id)
+    os.makedirs(user_dir, exist_ok=True)
+    file_hash = hashlib.sha256(data).hexdigest()[:12]
+    path = os.path.join(user_dir, f"{file_hash}_{filename}")
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
+
+
 # ── Background import ─────────────────────────────────────────────────────────
 
 def _run_import(connector_id: str, user_id: str) -> None:
@@ -215,16 +234,40 @@ def _run_import(connector_id: str, user_id: str) -> None:
                     break
                 if is_item_imported(connector_id, item.external_id, user_id):
                     continue
+
+                # File-backed items (e.g. a Drive CV PDF): persist the original
+                # bytes to disk and tag the memory `file-upload` so the job-hunt
+                # agent finds + attaches it. The memory title must be the bare
+                # filename so the agent's filename-based disk match works.
+                tags = ["connector", connector_id]
+                title_base = item.title
+                if item.raw_bytes and item.filename:
+                    try:
+                        _save_binary(user_id, item.filename, item.raw_bytes)
+                        title_base = item.filename
+                        ext = (
+                            item.filename.rsplit(".", 1)[-1].lower()
+                            if "." in item.filename else ""
+                        )
+                        tags = ["connector", connector_id, "file-upload"]
+                        if ext:
+                            tags.append(ext)
+                    except Exception as exc:
+                        logger.warning(
+                            "[connector:%s] [user:%s] failed to persist binary for %s: %s",
+                            connector_id, user_id[:8], item.external_id, exc,
+                        )
+
                 chunks = _chunk_text(item.content)
                 total_chunks = len(chunks)
                 first_memory_id: str | None = None
                 for i, chunk in enumerate(chunks):
-                    title = item.title if total_chunks == 1 else f"{item.title} ({i + 1}/{total_chunks})"
+                    title = title_base if total_chunks == 1 else f"{title_base} ({i + 1}/{total_chunks})"
                     try:
                         mem = save_memory(
                             title=title,
                             content=chunk,
-                            tags=["connector", connector_id],
+                            tags=tags,
                             user_id=user_id,
                         )
                         if first_memory_id is None:

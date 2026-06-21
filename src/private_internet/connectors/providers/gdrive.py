@@ -12,13 +12,20 @@ Scope:
    drive.readonly is needed to read pre-existing documents.)
 
 Fetch strategy:
-  GET /drive/v3/files  (q: not trashed, mimeType in [text/*, application/vnd.google-apps.document])
-  Google Docs → export as text/plain via /files/{id}/export?mimeType=text/plain
-  Plain text files → download via /files/{id}?alt=media
+  GET /drive/v3/files  (q: not trashed, mimeType in [text/*, application/pdf,
+                        application/vnd.google-apps.document])
+  Google Docs → export text/plain (brain) + export application/pdf (attachable original)
+  PDFs        → download bytes via /files/{id}?alt=media; extract text with pypdf
+  Plain text  → download via /files/{id}?alt=media
+
+Files (PDFs, exported Docs) carry their original bytes on the Item so the import
+pipeline persists them to the user's upload dir — making a CV in Drive visible to
+the job-hunt agent for merging into an application, just like a manual upload.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import urllib.parse
@@ -42,12 +49,16 @@ _SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 
 _PAGE_SIZE = 50
 _GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
+_PDF_MIME = "application/pdf"
 _TEXT_MIMES = {
     "text/plain",
     "text/markdown",
     "text/x-markdown",
     "text/html",
 }
+
+# Cap a single downloaded file at 20 MB to bound memory + embedding cost.
+_MAX_FILE_BYTES = 20_000_000
 
 
 def _redirect_uri() -> str:
@@ -68,6 +79,19 @@ def _raw_get(url: str, headers: dict, max_bytes: int = 500_000) -> str:
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.read(max_bytes).decode("utf-8", errors="replace")
+
+
+def _bytes_get(url: str, headers: dict, max_bytes: int = _MAX_FILE_BYTES) -> bytes:
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read(max_bytes)
+
+
+def _extract_pdf_text(data: bytes) -> str:
+    """Extract embeddable text from a PDF (mirrors memory/routes._extract_pdf_text)."""
+    from pypdf import PdfReader
+    reader = PdfReader(io.BytesIO(data))
+    return "\n\n".join(page.extract_text() or "" for page in reader.pages)
 
 
 def _parse_dt(iso: str | None) -> datetime | None:
@@ -178,7 +202,12 @@ class GDriveConnector(Connector):
         # List text files and Google Docs (not trashed).
         params: dict = {
             "pageSize": str(_PAGE_SIZE),
-            "q": "trashed = false and (mimeType = 'application/vnd.google-apps.document' or mimeType contains 'text/')",
+            "q": (
+                "trashed = false and ("
+                "mimeType = 'application/vnd.google-apps.document' or "
+                "mimeType = 'application/pdf' or "
+                "mimeType contains 'text/')"
+            ),
             "fields": "nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime)",
             "orderBy": "modifiedTime desc",
         }
@@ -198,15 +227,31 @@ class GDriveConnector(Connector):
             mime = f.get("mimeType", "")
             web_url = f.get("webViewLink")
             modified_at = _parse_dt(f.get("modifiedTime"))
+            # raw_bytes + filename let the import pipeline keep the original file
+            # on disk so the job-hunt agent can attach it (e.g. a CV) verbatim.
+            raw_bytes: bytes | None = None
+            filename: str | None = None
             try:
                 if mime == _GOOGLE_DOC_MIME:
+                    # Text for the brain; PDF export for an attachable original.
                     export_url = f"{_DRIVE_EXPORT_URL.format(id=file_id)}?mimeType=text/plain"
                     content = _raw_get(export_url, headers)
+                    try:
+                        pdf_url = f"{_DRIVE_EXPORT_URL.format(id=file_id)}?mimeType=application/pdf"
+                        raw_bytes = _bytes_get(pdf_url, headers)
+                        filename = f"{name}.pdf"
+                    except Exception as exc:
+                        logger.warning("Google Doc PDF export failed for %s (%s): %s", file_id, name, exc)
+                elif mime == _PDF_MIME:
+                    media_url = f"{_DRIVE_MEDIA_URL.format(id=file_id)}?alt=media"
+                    raw_bytes = _bytes_get(media_url, headers)
+                    filename = name if name.lower().endswith(".pdf") else f"{name}.pdf"
+                    content = _extract_pdf_text(raw_bytes)
                 elif mime in _TEXT_MIMES or mime.startswith("text/"):
                     media_url = f"{_DRIVE_MEDIA_URL.format(id=file_id)}?alt=media"
                     content = _raw_get(media_url, headers)
                 else:
-                    # mimeType matched the text/ contains filter but we don't handle it
+                    # mimeType matched the contains filter but we don't handle it
                     continue
             except Exception as exc:
                 logger.warning("Google Drive content fetch failed for %s (%s): %s", file_id, name, exc)
@@ -219,6 +264,8 @@ class GDriveConnector(Connector):
                 content=content,
                 source_url=web_url,
                 modified_at=modified_at,
+                raw_bytes=raw_bytes,
+                filename=filename,
             ))
 
         return FetchPage(
