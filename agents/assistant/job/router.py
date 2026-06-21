@@ -10,6 +10,9 @@ from pydantic import BaseModel
 from assistant.job import agent as job_agent
 from assistant.job import countries as job_countries
 from assistant.job.application.service import generate_application
+from assistant.job.platforms import catalog as platform_catalog
+from assistant.job.platforms import discovery as platform_discovery
+from assistant.job.platforms import setup_guide as platform_setup_guide
 from assistant.job.db import (
     append_feedback,
     create_or_reset_application,
@@ -27,7 +30,7 @@ from assistant.job.db import (
 )
 from assistant.job.models import RunReport
 from assistant.job.report import format_report
-from assistant.shared.auth import require_user
+from assistant.shared.auth import require_auth, require_user
 from assistant.shared.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -67,12 +70,94 @@ async def get_countries(ident: dict = Depends(require_user)):
     return {"countries": job_countries.as_dicts()}
 
 
+def _serialize_platform(p) -> dict:
+    return {
+        "platform_key": p.platform_key,
+        "display_name": p.display_name,
+        "domain": p.domain,
+        "available": p.available,
+        "needs_key": p.needs_key,
+        "rank": p.rank,
+    }
+
+
+@router.get("/platforms")
+async def get_platforms(
+    countries: list[str] = Query(
+        default=[],
+        description="ISO alpha-2 codes to fetch platforms for, e.g. ?countries=CH&countries=JP",
+    ),
+    settings: Settings = Depends(get_settings),
+    ident: dict = Depends(require_user),
+):
+    """Discovered job platforms grouped by country, for the platform multi-select.
+
+    Each country maps to a best-ranked-first list of platforms. A country with no
+    discovered platforms yet appears as an empty list. `needs_key` flags platforms
+    that require an API key the server doesn't have (link to the setup guide)."""
+    if not settings.database_url:
+        raise HTTPException(503, "DATABASE_URL is not configured")
+    codes = [c.upper() for c in countries if c and c.strip()]
+    invalid = [c for c in codes if not job_countries.is_valid(c)]
+    if invalid:
+        raise HTTPException(422, f"Unknown country code(s): {', '.join(invalid)}")
+
+    pool = await platform_catalog.init_pool(settings.database_url)
+    by_country = await platform_catalog.list_for_countries(pool, codes)
+    needs_key = any(p.needs_key for plats in by_country.values() for p in plats)
+    return {
+        "platforms": {
+            code: [_serialize_platform(p) for p in plats]
+            for code, plats in by_country.items()
+        },
+        "needs_key": needs_key,
+    }
+
+
+@router.post("/platforms/discover")
+async def discover_platforms(
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+    _caller: str = Depends(require_auth),
+):
+    """Kick off the daily platform-discovery orchestrator over all countries.
+
+    Internal/admin only (the nightly systemd timer calls this with the
+    INTERNAL_SECRET). Runs in the background and returns 202 immediately."""
+    if not settings.database_url:
+        raise HTTPException(503, "DATABASE_URL is not configured")
+    if not settings.rapidapi_key:
+        # Still run — the fallback path seeds LLM-only platforms and flags that a
+        # key is needed — but tell the caller why discovery can't validate.
+        logger.warning("Discovery starting without RAPIDAPI_KEY — fallback seeding only")
+    background_tasks.add_task(_run_discovery, settings)
+    return Response(status_code=202)
+
+
+@router.get("/platforms/setup-guide")
+async def platforms_setup_guide(
+    settings: Settings = Depends(get_settings),
+    ident: dict = Depends(require_user),
+):
+    """Step-by-step HTML page on generating the RapidAPI key(s) discovery needs."""
+    missing = []
+    if not settings.rapidapi_key:
+        missing.append("RAPIDAPI_KEY (JSearch)")
+    html = platform_setup_guide.build_html(missing or None)
+    return Response(content=html, media_type="text/html")
+
+
 @router.get("/run")
 async def trigger_run(
     background_tasks: BackgroundTasks,
     countries: list[str] = Query(
         default=[],
         description="ISO 3166-1 alpha-2 country codes to search, e.g. ?countries=CH&countries=DE",
+    ),
+    platforms: list[str] = Query(
+        default=[],
+        description="Platform keys to restrict the search to, e.g. ?platforms=linkedin&platforms=jobs_ch. "
+        "Empty = all platforms.",
     ),
     settings: Settings = Depends(get_settings),
     ident: dict = Depends(require_user),
@@ -91,6 +176,11 @@ async def trigger_run(
     if invalid:
         raise HTTPException(422, f"Unknown country code(s): {', '.join(invalid)}")
 
+    # Platform keys are optional. We pass them through verbatim; the agent resolves
+    # them against the catalog and silently ignores any that don't apply, so a
+    # stale selection never blocks a run.
+    platform_keys = [p.strip() for p in platforms if p and p.strip()]
+
     pool = await init_pool(settings.database_url)
     user_id = await _resolve_user_id(ident, pool)
     # Record the run as 'running' before we return so a poll of /report
@@ -98,7 +188,7 @@ async def trigger_run(
     # row that /report surfaces as 'interrupted' instead of a silent 404.
     run_id = await start_run(pool, user_id=user_id, countries=codes)
     background_tasks.add_task(
-        _run_job_agent, settings, user_id, ident["token"], codes, run_id
+        _run_job_agent, settings, user_id, ident["token"], codes, run_id, platform_keys
     )
     return {
         "status": "started",
@@ -355,6 +445,7 @@ async def _run_job_agent(
     token: Optional[str] = None,
     countries: Optional[list[str]] = None,
     run_id: Optional[int] = None,
+    platforms: Optional[list[str]] = None,
 ) -> None:
     # Bound every Bedrock call: without a read timeout a single hung/throttled
     # request stalls the whole run indefinitely. Adaptive retries add client-side
@@ -396,6 +487,7 @@ async def _run_job_agent(
             user_id=user_id,
             countries=countries or [],
             score_concurrency=settings.job_score_concurrency,
+            platforms=platforms or [],
         )
         _latest_reports[user_id] = report
         if run_id is not None and settings.database_url:
@@ -422,3 +514,39 @@ def _get_mcp_token(settings: Settings) -> Optional[str]:
     # Same-host auth to the memory API uses the shared INTERNAL_SECRET, which
     # Service A resolves to the seed admin. Stable — no OAuth token to refresh.
     return settings.internal_secret or None
+
+
+async def _run_discovery(settings: Settings) -> None:
+    """Background entrypoint for the platform-discovery orchestrator (nightly).
+
+    Runs the hub-and-spoke pass over every known country; the orchestrator skips
+    countries validated in the last 24h and routes to the fallback strategy if
+    RapidAPI can't validate any country."""
+    bedrock_client = boto3.client(
+        "bedrock-runtime",
+        region_name=settings.aws_region,
+        config=Config(
+            connect_timeout=10,
+            read_timeout=60,
+            retries={"max_attempts": 4, "mode": "adaptive"},
+        ),
+    )
+    codes = [code for code, _ in job_countries.COUNTRIES]
+    try:
+        report = await platform_discovery.orchestrate(
+            database_url=settings.database_url,
+            bedrock_client=bedrock_client,
+            model_id=settings.bedrock_model_id,
+            rapidapi_key=settings.rapidapi_key,
+            rapidapi_host=settings.rapidapi_host,
+            countries=codes,
+        )
+        logger.info(
+            "Platform discovery complete — %d platforms across %d validated countries"
+            "%s",
+            report.total_platforms,
+            report.validated_countries,
+            " (needs API key — see setup guide)" if report.needs_key else "",
+        )
+    except Exception:
+        logger.exception("Platform discovery orchestration failed")

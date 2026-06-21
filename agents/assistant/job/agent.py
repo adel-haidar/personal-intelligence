@@ -9,6 +9,7 @@ from typing import Optional
 from assistant.job.countries import name_for
 from assistant.job.db import count_all, init_pool, upsert_match
 from assistant.job.models import JobListing, MatchResult, RunReport, ScoredListing
+from assistant.job.platforms import catalog as platform_catalog
 from assistant.job.report import format_report
 from assistant.job.scorer import JobScorer
 from assistant.job.scrapers.base import ScraperError
@@ -111,6 +112,48 @@ def is_search_results_page(listing: JobListing) -> bool:
     return any(p.search(title_lower) for p in _SEARCH_PAGE_TITLE_PATTERNS)
 
 
+async def _build_platform_filter(
+    database_url: str, country_codes: list[str], platform_keys: list[str]
+) -> Optional[tuple[set[str], set[str]]]:
+    """Resolve selected platform_keys to (publisher-name set, domain set) for
+    matching JSearch results. Returns None when no usable filter applies (no
+    selection, or the keys aren't in the catalog) — meaning "don't filter"."""
+    if not platform_keys:
+        return None
+    try:
+        pool = await platform_catalog.init_pool(database_url)
+        by_country = await platform_catalog.list_for_countries(pool, country_codes)
+    except Exception:
+        logger.warning("Could not load platform catalog for filtering", exc_info=True)
+        return None
+
+    wanted = {k.lower() for k in platform_keys}
+    names: set[str] = set()
+    domains: set[str] = set()
+    for plats in by_country.values():
+        for p in plats:
+            if p.platform_key.lower() in wanted:
+                names.add(p.display_name.strip().lower())
+                if p.domain:
+                    domains.add(p.domain.strip().lower())
+    if not names and not domains:
+        return None
+    return names, domains
+
+
+def _listing_matches_platforms(
+    listing: JobListing, names: set[str], domains: set[str]
+) -> bool:
+    """True if the listing's publisher/apply-publishers or URL match a selected
+    platform by board name or domain (case-insensitive)."""
+    pubs = [listing.publisher or "", *listing.apply_publishers]
+    pubs_lower = [p.strip().lower() for p in pubs if p and p.strip()]
+    if any(p in names for p in pubs_lower):
+        return True
+    haystack = " ".join(pubs_lower) + " " + (listing.job_url or "").lower()
+    return any(d and d in haystack for d in domains)
+
+
 async def run_agent(
     database_url: str,
     bedrock_client,
@@ -123,6 +166,7 @@ async def run_agent(
     user_id: str,
     countries: list[str],
     score_concurrency: int = 6,
+    platforms: Optional[list[str]] = None,
 ) -> RunReport:
     timestamp = datetime.utcnow()
     pool = await init_pool(database_url)
@@ -220,6 +264,23 @@ async def run_agent(
         seen_urls.add(listing.job_url)
         seen_keys.add(key)
         deduped.append(listing)
+
+    # Restrict to the platforms the user selected (by JSearch publisher/domain).
+    # No selection → keep everything (current behaviour). Applied post-dedup,
+    # pre-scoring so we never pay to score a board the user didn't ask for.
+    platform_filter = await _build_platform_filter(
+        database_url, country_codes, platforms or []
+    )
+    if platform_filter is not None:
+        names, domains = platform_filter
+        before = len(deduped)
+        deduped = [
+            l for l in deduped if _listing_matches_platforms(l, names, domains)
+        ]
+        logger.info(
+            "Platform filter %s: kept %d of %d listings",
+            sorted(platforms or []), len(deduped), before,
+        )
 
     dedup_count = len(deduped)
     logger.info("Collected %d raw, %d after dedup", raw_count, dedup_count)

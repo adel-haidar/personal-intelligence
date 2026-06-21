@@ -96,9 +96,20 @@ class RapidApiScraper(BaseScraper):
             state_part = item.get("job_state") or ""
             location = ", ".join(p for p in [city_part, state_part] if p) or country_name
 
+            # JSearch aggregates many boards; the real source is `job_publisher`
+            # (plus the boards in `apply_options`). Capture them so a run can be
+            # filtered to the platforms the user selected — and so the stored
+            # `platform` is the actual board, not a blanket "LinkedIn" label.
+            publisher = (item.get("job_publisher") or "").strip() or None
+            apply_publishers = [
+                (opt.get("publisher") or "").strip()
+                for opt in (item.get("apply_options") or [])
+                if (opt.get("publisher") or "").strip()
+            ]
+
             listings.append(
                 JobListing(
-                    platform="LinkedIn",
+                    platform=publisher or "LinkedIn",
                     title=item.get("job_title") or "",
                     company=item.get("employer_name") or "",
                     location=location,
@@ -108,6 +119,8 @@ class RapidApiScraper(BaseScraper):
                     salary_raw=salary_raw,
                     description=item.get("job_description") or "",
                     remote_type=remote_type,
+                    publisher=publisher,
+                    apply_publishers=apply_publishers,
                 )
             )
             if len(listings) >= self._max:

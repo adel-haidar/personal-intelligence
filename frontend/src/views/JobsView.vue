@@ -5,6 +5,7 @@ import PageHead from '../components/ui/PageHead.vue'
 import JobsStats from '../components/jobs/JobsStats.vue'
 import JobsFilters from '../components/jobs/JobsFilters.vue'
 import JobsCountryPicker from '../components/jobs/JobsCountryPicker.vue'
+import JobsPlatformPicker from '../components/jobs/JobsPlatformPicker.vue'
 import JobsTable from '../components/jobs/JobsTable.vue'
 import JobRunProgress from '../components/jobs/JobRunProgress.vue'
 import JobsReportPanel from '../components/jobs/JobsReportPanel.vue'
@@ -14,6 +15,8 @@ const showReport = ref(false)
 
 onMounted(async () => {
   await Promise.all([store.fetchMatches(), store.fetchReport(), store.loadCountries()])
+  // Populate the platform picker for any countries restored from a prior session.
+  if (store.state.selectedRunCountries.length > 0) await store.loadPlatforms()
 })
 </script>
 
@@ -28,12 +31,13 @@ onMounted(async () => {
       <div class="header-left">
         <PageHead
           title="Job hunt"
-          desc="AI-scored matches from LinkedIn — pick any countries to search"
+          desc="AI-scored matches — pick countries, then the best boards for each"
         />
       </div>
       <div class="header-right">
         <div class="btn-group">
           <JobsCountryPicker />
+          <JobsPlatformPicker />
           <button
             class="btn btn-secondary"
             :aria-pressed="showReport"

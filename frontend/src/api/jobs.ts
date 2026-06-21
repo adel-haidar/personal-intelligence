@@ -5,6 +5,7 @@ import type {
   RunReport,
   JobStatus,
   CountriesResponse,
+  PlatformsResponse,
   JobApplication,
   StartApplicationResponse,
   ApplyResponse,
@@ -64,9 +65,30 @@ export async function fetchCountries(): Promise<CountriesResponse> {
   return res.json() as Promise<CountriesResponse>
 }
 
-export async function triggerRun(countries: string[]): Promise<RunResponse> {
+export async function fetchPlatforms(countries: string[]): Promise<PlatformsResponse> {
   const query = new URLSearchParams()
   countries.forEach(c => query.append('countries', c))
+  const res = await authFetch(`${BASE}/api/jobs/platforms?${query.toString()}`)
+  if (!res.ok) throw new Error(`Failed to fetch platforms: HTTP ${res.status}`)
+  return res.json() as Promise<PlatformsResponse>
+}
+
+/** Open the API-key setup guide in a new tab. The endpoint needs the auth
+ * header, so we fetch the HTML and open it as a blob URL rather than linking. */
+export async function openSetupGuide(): Promise<void> {
+  const res = await authFetch(`${BASE}/api/jobs/platforms/setup-guide`)
+  if (!res.ok) throw new Error(`Failed to load setup guide: HTTP ${res.status}`)
+  const html = await res.text()
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+  window.open(url, '_blank', 'noopener')
+  // Revoke after a tick so the new tab has time to load it.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+export async function triggerRun(countries: string[], platforms: string[] = []): Promise<RunResponse> {
+  const query = new URLSearchParams()
+  countries.forEach(c => query.append('countries', c))
+  platforms.forEach(p => query.append('platforms', p))
   const res = await authFetch(`${BASE}/api/jobs/run?${query.toString()}`)
   if (!res.ok) {
     let detail = `HTTP ${res.status}`

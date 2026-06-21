@@ -1,16 +1,23 @@
 import { reactive, computed, type UnwrapNestedRefs } from 'vue'
-import type { JobMatch, MatchTier, JobStatus, RunReport, SortField, SortDir, Country } from '../types/jobs'
+import type { JobMatch, MatchTier, JobStatus, RunReport, SortField, SortDir, Country, PlatformsByCountry } from '../types/jobs'
 import * as api from '../api/jobs'
 
 const RUN_COUNTRIES_KEY = 'jobs.runCountries'
+const RUN_PLATFORMS_KEY = 'jobs.runPlatforms'
 
-function loadStoredRunCountries(): string[] {
+function loadStoredList(key: string): string[] {
   try {
-    const raw = localStorage.getItem(RUN_COUNTRIES_KEY)
+    const raw = localStorage.getItem(key)
     return raw ? (JSON.parse(raw) as string[]) : []
   } catch {
     return []
   }
+}
+
+function persistList(key: string, value: string[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch { /* ignore */ }
 }
 
 interface JobsState {
@@ -24,6 +31,10 @@ interface JobsState {
   error: string | null
   availableCountries: Country[]
   selectedRunCountries: string[]
+  availablePlatforms: PlatformsByCountry
+  selectedRunPlatforms: string[]
+  platformsLoading: boolean
+  platformsNeedKey: boolean
   filterTier: MatchTier | ''
   filterCountry: string
   filterStatus: JobStatus | ''
@@ -42,7 +53,11 @@ const state = reactive<JobsState>({
   lastRunAt: null,
   error: null,
   availableCountries: [],
-  selectedRunCountries: loadStoredRunCountries(),
+  selectedRunCountries: loadStoredList(RUN_COUNTRIES_KEY),
+  availablePlatforms: {},
+  selectedRunPlatforms: loadStoredList(RUN_PLATFORMS_KEY),
+  platformsLoading: false,
+  platformsNeedKey: false,
   filterTier: '',
   filterCountry: '',
   filterStatus: '',
@@ -109,9 +124,55 @@ function toggleRunCountry(code: string): void {
   const i = state.selectedRunCountries.indexOf(code)
   if (i === -1) state.selectedRunCountries.push(code)
   else state.selectedRunCountries.splice(i, 1)
+  persistList(RUN_COUNTRIES_KEY, state.selectedRunCountries)
+  // The platform options depend on the chosen countries — refresh them.
+  loadPlatforms()
+}
+
+const allPlatformKeys = computed((): Set<string> => {
+  const keys = new Set<string>()
+  for (const list of Object.values(state.availablePlatforms)) {
+    for (const p of list) keys.add(p.platform_key)
+  }
+  return keys
+})
+
+async function loadPlatforms(): Promise<void> {
+  const codes = state.selectedRunCountries
+  if (codes.length === 0) {
+    state.availablePlatforms = {}
+    state.platformsNeedKey = false
+    return
+  }
+  state.platformsLoading = true
   try {
-    localStorage.setItem(RUN_COUNTRIES_KEY, JSON.stringify(state.selectedRunCountries))
-  } catch { /* ignore */ }
+    const res = await api.fetchPlatforms(codes)
+    state.availablePlatforms = res.platforms
+    state.platformsNeedKey = res.needs_key
+    // Drop any selected platforms that no longer exist for the current countries.
+    const valid = allPlatformKeys.value
+    state.selectedRunPlatforms = state.selectedRunPlatforms.filter(k => valid.has(k))
+    persistList(RUN_PLATFORMS_KEY, state.selectedRunPlatforms)
+  } catch {
+    // non-fatal — the picker just shows nothing until a retry
+  } finally {
+    state.platformsLoading = false
+  }
+}
+
+function toggleRunPlatform(key: string): void {
+  const i = state.selectedRunPlatforms.indexOf(key)
+  if (i === -1) state.selectedRunPlatforms.push(key)
+  else state.selectedRunPlatforms.splice(i, 1)
+  persistList(RUN_PLATFORMS_KEY, state.selectedRunPlatforms)
+}
+
+async function openSetupGuide(): Promise<void> {
+  try {
+    await api.openSetupGuide()
+  } catch (err) {
+    state.error = err instanceof Error ? err.message : 'Failed to open setup guide'
+  }
 }
 
 async function fetchReport(): Promise<void> {
@@ -150,7 +211,7 @@ async function triggerRun(): Promise<void> {
   state.error = null
 
   try {
-    await api.triggerRun(state.selectedRunCountries)
+    await api.triggerRun(state.selectedRunCountries, state.selectedRunPlatforms)
   } catch (err) {
     state.isRunning = false
     state.runStatus = 'error'
@@ -248,6 +309,9 @@ const _store = reactive({
   fetchReport,
   loadCountries,
   toggleRunCountry,
+  loadPlatforms,
+  toggleRunPlatform,
+  openSetupGuide,
   triggerRun,
   updateStatus,
   setFilter,

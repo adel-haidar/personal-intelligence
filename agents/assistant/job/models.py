@@ -15,6 +15,11 @@ class JobListing(BaseModel):
     salary_raw: Optional[str] = None
     description: str = ""
     remote_type: str = "unknown"
+    # The board(s) this listing was published on. `publisher` is the primary
+    # JSearch `job_publisher`; `apply_publishers` are the additional boards from
+    # `apply_options`. Used to filter a run to the platforms the user selected.
+    publisher: Optional[str] = None
+    apply_publishers: list[str] = []
 
 
 class MatchResult(BaseModel):

@@ -96,6 +96,23 @@ export interface CountriesResponse {
   countries: Country[]
 }
 
+export interface Platform {
+  platform_key: string
+  display_name: string
+  domain: string | null
+  available: boolean
+  needs_key: boolean
+  rank: number
+}
+
+// Platforms grouped by ISO country code, best-ranked first.
+export type PlatformsByCountry = Record<string, Platform[]>
+
+export interface PlatformsResponse {
+  platforms: PlatformsByCountry
+  needs_key: boolean
+}
+
 export type SortField = 'match_score' | 'run_timestamp' | 'company' | 'country'
 export type SortDir = 'asc' | 'desc'
 

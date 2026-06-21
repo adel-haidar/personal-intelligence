@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the job-platform discovery orchestrator (per-country boards)
+After=network.target personal-intelligence-agents.service
+Wants=personal-intelligence-agents.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/home/ec2-user/personal-intelligence/.env
+# Job routes are served by the agents service on port 8001 (internal only).
+# Auth uses the stable INTERNAL_SECRET (require_auth accepts it) so the timer
+# never breaks on OAuth token expiry. The orchestrator runs in the background
+# and returns 202 immediately; it skips countries validated in the last 24h.
+ExecStart=/bin/sh -c 'curl -s -o /dev/null -w "%%{http_code}" -X POST -H "Authorization: Bearer $INTERNAL_SECRET" http://127.0.0.1:8001/api/jobs/platforms/discover'
