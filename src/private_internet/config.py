@@ -163,8 +163,19 @@ class Settings(BaseSettings):
     # Inert until BOTH are set: the dashboard "Continue with Google" button then
     # issues a platform JWT. Separate from the OAuth 2.1 server in auth/.
     # Redirect URI to register in Google Cloud: {base_url}/api/auth/google/callback
+    # Also reused by the Google Drive connector (connectors/providers/gdrive.py).
+    # Register an additional redirect URI: {base_url}/api/connectors/gdrive/callback
     google_client_id: str = ""
     google_client_secret: str = ""
+
+    # ── Connectors (external platform import) ───────────────────
+    # Each connector is inert until its client_id + client_secret are both set.
+    # Notion: register redirect URI {base_url}/api/connectors/notion/callback
+    notion_client_id: str = ""
+    notion_client_secret: str = ""
+    # GitHub: register redirect URI {base_url}/api/connectors/github/callback
+    github_client_id: str = ""
+    github_client_secret: str = ""
 
     @property
     def base_url(self) -> str:

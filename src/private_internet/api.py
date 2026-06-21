@@ -13,6 +13,8 @@ from private_internet.billing.routes import router as billing_router
 from private_internet.billing.service import require_feature
 from private_internet.brain.db import init_brain_db
 from private_internet.brain.routes import router as brain_router
+from private_internet.connectors.db import init_connectors_db
+from private_internet.connectors.routes import router as connectors_router
 from private_internet.config import get_settings
 from private_internet.content.aria.db import init_aria_db
 from private_internet.content.aria.podcast_db import init_aria_podcast_db
@@ -124,6 +126,9 @@ async def lifespan(app: FastAPI):
     _bootstrap_step("seed_tester_coupons", seed_tester_coupons)
     # Brain Organiser columns/tables depend on the memories table existing.
     _bootstrap_step("init_brain_db", init_brain_db)
+    # Connectors schema depends on the memories table existing (connector_items
+    # records memory_id TEXT references from memory/service.py).
+    _bootstrap_step("init_connectors_db", init_connectors_db)
     # Non-fatal: warn (don't fail startup) if podcast voices are still placeholders.
     _bootstrap_step("check_podcast_voices", warn_if_podcast_voices_unconfigured)
 
@@ -171,6 +176,9 @@ app.include_router(aria_router, dependencies=[Depends(require_feature("aria"))])
 app.include_router(stories_router, dependencies=[Depends(require_feature("stories"))])
 app.include_router(billing_router)
 app.include_router(brain_router)
+# Connectors (external platform import: Notion, GitHub, Google Drive, …).
+# The OAuth callback route carries no auth dependency (provider calls it directly).
+app.include_router(connectors_router)
 # Global sharing. The public GET /api/share/{token} carries no auth dependency
 # (it serves only a denormalised snapshot); POST/list/DELETE are per-route auth'd.
 app.include_router(sharing_router)

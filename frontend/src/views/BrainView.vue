@@ -26,6 +26,7 @@
  */
 
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import BrainPulse from '../components/ui/BrainPulse.vue'
 import PiCard from '../components/ui/PiCard.vue'
 import PiTextarea from '../components/ui/PiTextarea.vue'
@@ -35,17 +36,30 @@ import ProgressBar from '../components/ui/ProgressBar.vue'
 import Tag from '../components/ui/Tag.vue'
 import PIIcon from '../components/ui/PIIcon.vue'
 import IconButton from '../components/ui/IconButton.vue'
+import ConnectorsModal from '../components/ConnectorsModal.vue'
 import { useToast } from '../components/ui/useToast'
 import { requireAuth } from '../composables/useAuth'
 import { deleteMemory } from '../composables/useMemories'
 import { useBrainOrganiser } from '../composables/useBrainOrganiser'
+import { ensureMessageListener, removeMessageListener } from '../composables/useConnectors'
 import { API_BASE } from '../config/env'
 import type { Memory, MemoryStats, CreateMemoryPayload } from '../types/memory'
+
+// ---------------------------------------------------------------------------
+// Router (for popup-completion query params)
+// ---------------------------------------------------------------------------
+const route  = useRoute()
+const router = useRouter()
 
 // ---------------------------------------------------------------------------
 // Toast
 // ---------------------------------------------------------------------------
 const toast = useToast()
+
+// ---------------------------------------------------------------------------
+// Connectors modal
+// ---------------------------------------------------------------------------
+const showConnectors = ref(false)
 
 // ---------------------------------------------------------------------------
 // State
@@ -165,6 +179,43 @@ const { status: organiserStatus, running: organiserRunning, ensurePolling: ensur
 
 onMounted(async () => {
   ensureOrganiserPolling()
+
+  // ── Popup-completion handling ─────────────────────────────────────────────
+  // The backend 302-redirects the OAuth popup to /memory?connected={id} or
+  // /memory?connect_error={id}. Handle both cases:
+  const connectedId   = route.query.connected   as string | undefined
+  const connectErrId  = route.query.connect_error as string | undefined
+
+  if (connectedId || connectErrId) {
+    if (window.opener && !window.opener.closed) {
+      // We ARE the popup — postMessage to the opener and self-close.
+      window.opener.postMessage(
+        { type: 'pi-connector', id: connectedId ?? connectErrId, ok: !!connectedId },
+        window.location.origin,
+      )
+      window.close()
+      // If window.close() is blocked, fall through to the non-popup path below
+      // after a short delay so the user at least sees something sensible.
+    } else {
+      // Not a popup (was redirected in the main tab, e.g. popup was blocked).
+      if (connectedId) {
+        toast(`Connected successfully — your content is being imported.`, 'success')
+      } else {
+        toast(`Connection failed. Please try again.`, 'error')
+      }
+      // Strip the query param without a page reload
+      await router.replace({ path: '/memory' })
+      // Refresh stats + memories so newly-imported content appears
+      await Promise.all([fetchStats(), fetchMemories(true)])
+      await nextTick()
+      setupObserver()
+      return
+    }
+  }
+
+  // ── Ensure message listener for popup events ──────────────────────────────
+  ensureMessageListener()
+
   try {
     await Promise.all([fetchStats(), fetchMemories(true)])
   } catch (err) {
@@ -178,6 +229,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   observer?.disconnect()
   if (debounceTimer) clearTimeout(debounceTimer)
+  removeMessageListener()
 })
 
 // ---------------------------------------------------------------------------
@@ -330,6 +382,21 @@ async function handleDelete(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Connector import finished callback
+// ---------------------------------------------------------------------------
+async function handleImportFinished(_id: string): Promise<void> {
+  showConnectors.value = false
+  toast('Import complete — your new memories are ready', 'success')
+  try {
+    await Promise.all([fetchStats(), fetchMemories(true)])
+    await nextTick()
+    setupObserver()
+  } catch {
+    // silently ignore refresh errors
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Derived
 // ---------------------------------------------------------------------------
 const isEmpty = computed(() => !initialLoading.value && stats.value.total === 0 && memories.value.length === 0)
@@ -384,15 +451,25 @@ const hasMore = computed(() => page.value < pages.value)
         style="min-height: 140px"
       />
       <div class="brain-add__footer">
-        <PiButton
-          variant="ghost"
-          size="compact"
-          icon="attach"
-          :loading="uploading"
-          @click="triggerFileInput"
-        >
-          Attach file
-        </PiButton>
+        <div class="brain-add__left">
+          <PiButton
+            variant="ghost"
+            size="compact"
+            icon="attach"
+            :loading="uploading"
+            @click="triggerFileInput"
+          >
+            Attach file
+          </PiButton>
+          <PiButton
+            variant="ghost"
+            size="compact"
+            icon="globe"
+            @click="showConnectors = true"
+          >
+            Import from other platforms
+          </PiButton>
+        </div>
         <input
           ref="fileInputRef"
           type="file"
@@ -510,6 +587,15 @@ const hasMore = computed(() => page.value < pages.value)
         </div>
       </div>
     </template>
+
+    <!-- ------------------------------------------------------------------ -->
+    <!-- Connectors modal                                                     -->
+    <!-- ------------------------------------------------------------------ -->
+    <ConnectorsModal
+      v-if="showConnectors"
+      @close="showConnectors = false"
+      @import-finished="handleImportFinished"
+    />
 
     <!-- ------------------------------------------------------------------ -->
     <!-- View full modal                                                      -->
@@ -632,6 +718,13 @@ const hasMore = computed(() => page.value < pages.value)
   justify-content: space-between;
   margin-top: var(--space-3);
   gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.brain-add__left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
