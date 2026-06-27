@@ -58,6 +58,8 @@ export interface BrokerInfo {
   label?: string
   status?: string
   last_verified_at?: string | null
+  available_cash?: number | null
+  currency?: string | null
 }
 
 export interface DeskRun {
@@ -370,6 +372,8 @@ export function useTradingDesk() {
     try {
       const b = await apiPut<BrokerInfo>('/api/trading/desk/broker', { environment, api_key, api_secret })
       broker.value = b
+      // Refresh via GET so we pick up the account's real available_cash.
+      await loadBroker()
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to connect broker'
     } finally {

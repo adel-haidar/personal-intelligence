@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, computed, ref } from 'vue'
+import { onMounted, computed, ref, watch } from 'vue'
 import PiCard from '../ui/PiCard.vue'
 import PiButton from '../ui/PiButton.vue'
 import PIIcon from '../ui/PIIcon.vue'
@@ -73,14 +73,52 @@ async function setMode(m: TradeMode) {
   await saveConfig({ mode: m })
 }
 
+// Upper bound on what the user may hand the agents:
+//  - paper: the €100k simulated balance
+//  - live:  their REAL Trading 212 available cash, minus the reserve floor
+//           (null while unknown — e.g. broker not connected yet)
+const allocationCap = computed<number | null>(() => {
+  if (config.value.account === 'paper') return 100000
+  const cash = broker.value.available_cash
+  if (cash == null) return null
+  return Math.max(0, Math.floor(cash - config.value.reserve_floor))
+})
+
+const allocationCeilingLabel = computed(() => {
+  if (config.value.account === 'paper') return `of ${money(100000)} simulated`
+  if (!broker.value.connected) return ''
+  const cash = broker.value.available_cash
+  if (cash == null) return ''
+  return `of ${money(cash)} available`
+})
+
 async function setAccount(a: TradeAccount) {
   config.value.account = a
-  if (a === 'paper') {
-    config.value.allocation = 25000
-    config.value.reserve_floor = 5000
-  }
+  // Clamp the current allocation to the new account's ceiling before saving.
+  const cap = allocationCap.value
+  if (cap != null && config.value.allocation > cap) config.value.allocation = cap
   await saveConfig({ account: a, allocation: config.value.allocation, reserve_floor: config.value.reserve_floor })
 }
+
+async function setAllocation(val: number) {
+  let v = Math.max(0, Math.round(val || 0))
+  const cap = allocationCap.value
+  if (cap != null) v = Math.min(v, cap)
+  config.value.allocation = v
+  // Reserve floor can never exceed the allocation.
+  if (config.value.reserve_floor > v) {
+    config.value.reserve_floor = v
+    await saveConfig({ allocation: v, reserve_floor: v })
+  } else {
+    await saveConfig({ allocation: v })
+  }
+}
+
+// When the real balance arrives (or the account switches), clamp a too-large
+// allocation down to what the account can actually back, and persist it.
+watch(allocationCap, (cap) => {
+  if (cap != null && config.value.allocation > cap) setAllocation(cap)
+})
 
 async function toggleUniverse(key: keyof typeof config.value.universe) {
   config.value.universe[key] = !config.value.universe[key]
@@ -261,8 +299,42 @@ const latestEvent = computed(() => {
           <div class="td-eyebrow" style="margin-bottom: var(--space-2);">Made available to the agents</div>
           <div class="td-alloc-big">
             {{ money(config.allocation) }}
-            <span class="td-alloc-of">of {{ config.account === 'paper' ? money(100000) : money(config.allocation + config.reserve_floor) }} {{ config.account === 'paper' ? 'simulated' : '' }}</span>
+            <span class="td-alloc-of">{{ allocationCeilingLabel }}</span>
           </div>
+
+          <!-- Editable allocation -->
+          <div class="td-alloc-edit">
+            <input
+              class="td-alloc-range"
+              type="range"
+              min="0"
+              :max="allocationCap ?? (config.account === 'paper' ? 100000 : Math.max(config.allocation, 1000))"
+              step="100"
+              :value="config.allocation"
+              :disabled="config.account === 'live' && !broker.connected"
+              @input="config.allocation = +($event.target as HTMLInputElement).value"
+              @change="setAllocation(+($event.target as HTMLInputElement).value)"
+            />
+            <div class="td-alloc-numwrap">
+              <span class="t-mono td-alloc-cur">€</span>
+              <input
+                class="pi-input td-alloc-num t-mono"
+                type="number"
+                min="0"
+                :max="allocationCap ?? undefined"
+                step="100"
+                :value="config.allocation"
+                :disabled="config.account === 'live' && !broker.connected"
+                @change="setAllocation(+($event.target as HTMLInputElement).value)"
+              />
+            </div>
+          </div>
+          <p v-if="config.account === 'live' && !broker.connected" class="td-alloc-hint">
+            Connect Trading 212 below to set a live allocation from your real balance.
+          </p>
+          <p v-else-if="config.account === 'live' && broker.available_cash != null" class="td-alloc-hint">
+            Capped at your available Trading 212 cash ({{ money(broker.available_cash) }}){{ config.reserve_floor ? ` minus the ${money(config.reserve_floor)} reserve` : '' }}.
+          </p>
 
           <!-- Meter bar -->
           <div class="td-meter" role="presentation">
@@ -982,6 +1054,16 @@ const latestEvent = computed(() => {
   );
 }
 .td-alloc-note { font-size: var(--text-sm); color: var(--text-tertiary); line-height: 1.6; }
+.td-alloc-edit {
+  display: flex; align-items: center; gap: var(--space-4);
+  margin: var(--space-3) 0 var(--space-2);
+}
+.td-alloc-range { flex: 1; accent-color: var(--accent-primary); cursor: pointer; }
+.td-alloc-range:disabled { opacity: 0.5; cursor: not-allowed; }
+.td-alloc-numwrap { display: flex; align-items: center; gap: var(--space-1); }
+.td-alloc-cur { color: var(--text-tertiary); }
+.td-alloc-num { width: 120px; text-align: right; }
+.td-alloc-hint { font-size: var(--text-xs); color: var(--text-tertiary); margin: 0 0 var(--space-2); }
 
 /* ── Card header ───────────────────────────────────────────────────────── */
 .td-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-4); flex-wrap: wrap; }

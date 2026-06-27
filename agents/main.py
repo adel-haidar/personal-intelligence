@@ -512,8 +512,22 @@ def _broker_view(broker: dict | None) -> dict:
 
 @app.get("/api/trading/desk/broker")
 async def desk_get_broker(ident: dict = Depends(require_user)):
-    broker = await trading_db.get_broker(ident["user_id"], provider="trading212")
-    return _broker_view(broker)
+    user_id = ident["user_id"]
+    broker = await trading_db.get_broker(user_id, provider="trading212")
+    view = _broker_view(broker)
+    # When connected, surface the REAL available cash so the dashboard can bound
+    # the allocation to what the account actually holds (best-effort).
+    if view["connected"]:
+        view["available_cash"] = None
+        view["currency"] = None
+        try:
+            adapter = await desk_coordinator._make_broker(user_id, "live", None)
+            cash = await adapter.get_cash()
+            view["available_cash"] = cash.get("free")
+            view["currency"] = cash.get("currency")
+        except Exception:
+            logger.warning("Could not read Trading 212 balance", exc_info=True)
+    return view
 
 
 @app.put("/api/trading/desk/broker")
@@ -567,13 +581,37 @@ async def desk_start_run(ident: dict = Depends(require_user)):
     if cfg is None:
         cfg = await trading_db.upsert_config(user_id, **_seeded_config(user_id))
 
+    account = cfg.get("account", "paper")
+    allocation = float(cfg.get("allocation") or 0)
+    reserve = float(cfg.get("reserve_floor") or 0)
+
+    # Live runs: never let the agents deploy more than the account actually holds.
+    # Clamp the allocation to (available Trading 212 cash − reserve floor).
+    if account == "live":
+        try:
+            adapter = await desk_coordinator._make_broker(user_id, "live", None)
+            cash = await adapter.get_cash()
+        except BrokerError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not read your Trading 212 balance: {exc}")
+        free = float(cash.get("free") or 0)
+        max_alloc = max(0.0, free - reserve)
+        if allocation > max_alloc:
+            allocation = round(max_alloc, 2)
+            cfg = {**cfg, "allocation": allocation}
+        if allocation <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Your Trading 212 available cash (€{free:.2f}) minus the "
+                        f"€{reserve:.2f} reserve floor leaves nothing to allocate."),
+            )
+
     run = await trading_db.create_run(
         user_id,
-        account=cfg.get("account", "paper"),
+        account=account,
         strategy=cfg.get("strategy", _DEFAULT_STRATEGY),
         mode=cfg.get("mode", "controlled"),
-        allocation=cfg.get("allocation", _DEFAULT_ALLOCATION),
-        reserve=cfg.get("reserve_floor", _DEFAULT_RESERVE_FLOOR),
+        allocation=allocation,
+        reserve=reserve,
     )
     # Launch the orchestrator as a detached background task; the frontend polls.
     asyncio.create_task(desk_coordinator.run_desk(run["id"], user_id, cfg, token=ident["token"]))
