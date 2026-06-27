@@ -20,9 +20,18 @@ risk_verdict, risk_note, order_type, limit_price.
 import json
 import logging
 from datetime import date
+from decimal import Decimal
 
 from assistant.shared.base_llm_service import BaseLLMService
 from assistant.shared.bedrock_retry import invoke_with_tool_retry
+
+
+def _jsonable(o):
+    """json.dumps default: config/positions carry Decimals (from Postgres NUMERIC)
+    which are not JSON-serializable on their own."""
+    if isinstance(o, Decimal):
+        return float(o)
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +91,7 @@ class Analyst(BaseLLMService):
             parts.append(f"<strategy-context>\n{strategy_ctx}\n</strategy-context>")
         parts.append(
             "<market-snapshot>\n"
-            f"{json.dumps(snapshot, ensure_ascii=False, indent=1)}\n"
+            f"{json.dumps(snapshot, ensure_ascii=False, indent=1, default=_jsonable)}\n"
             "</market-snapshot>"
         )
         parts.append(f"Today's date: {date.today().isoformat()}")
@@ -171,11 +180,11 @@ class Strategist(BaseLLMService):
             "crypto_pct": guardrails.get("crypto_pct"),
         }
         parts = [
-            f"<desk-config>\n{json.dumps(desk_config, ensure_ascii=False)}\n</desk-config>",
-            f"<signals>\n{json.dumps(signals, ensure_ascii=False)}\n</signals>",
-            f"<current-positions>\n{json.dumps(positions or [], ensure_ascii=False)}\n</current-positions>",
+            f"<desk-config>\n{json.dumps(desk_config, ensure_ascii=False, default=_jsonable)}\n</desk-config>",
+            f"<signals>\n{json.dumps(signals, ensure_ascii=False, default=_jsonable)}\n</signals>",
+            f"<current-positions>\n{json.dumps(positions or [], ensure_ascii=False, default=_jsonable)}\n</current-positions>",
             "<market-snapshot>\n"
-            f"{json.dumps(snapshot, ensure_ascii=False, indent=1)}\n"
+            f"{json.dumps(snapshot, ensure_ascii=False, indent=1, default=_jsonable)}\n"
             "</market-snapshot>",
         ]
         return invoke_with_tool_retry(
@@ -271,8 +280,8 @@ class RiskOfficer(BaseLLMService):
             "default_stop_pct": guardrails.get("default_stop_pct"),
         }
         parts = [
-            f"<desk-config>\n{json.dumps(desk_config, ensure_ascii=False)}\n</desk-config>",
-            f"<candidates>\n{json.dumps(candidates, ensure_ascii=False)}\n</candidates>",
+            f"<desk-config>\n{json.dumps(desk_config, ensure_ascii=False, default=_jsonable)}\n</desk-config>",
+            f"<candidates>\n{json.dumps(candidates, ensure_ascii=False, default=_jsonable)}\n</candidates>",
         ]
         return invoke_with_tool_retry(
             client=self._client,
