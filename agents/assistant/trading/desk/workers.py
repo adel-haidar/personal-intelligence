@@ -162,8 +162,26 @@ rules (stated in <desk-config>):
   of the allocation; if crypto_pct is 0, propose no crypto.
 - `pct_of_allocation` must equal amount / allocation * 100, rounded sensibly.
 - Prefer order_type=market unless a limit is clearly justified (set limit_price then).
-- Use side `trim`/`sell` only against positions the user already holds (in
-  <current-positions>). Do not invent holdings.
+
+TRADEABILITY — every candidate MUST be a real, individually tradeable security:
+- ONLY individual stocks or ETFs that exist on a retail broker (e.g. AAPL, MSFT,
+  NVDA, ASML, VWCE, SXR8). Use the plain exchange ticker only.
+- NEVER propose a market INDEX or an index quote as a trade. The <market-snapshot>
+  indices (symbols like ^IXIC, ^GSPC, ^DJI, ^GDAXI, ^STOXX50E, ^FTSE, ^STI, …, or
+  anything starting with '^') are CONTEXT ONLY — they show market direction and are
+  NOT buyable/sellable. If you want index exposure, use a real ETF ticker instead.
+- No ticker may start with '^' or be a currency/commodity index.
+
+SIDES — this desk is funded with NEW cash:
+- Default to `buy`. Only use `sell`/`trim` to reduce a position that ACTUALLY appears
+  in <current-positions>. If <current-positions> is empty, propose BUYS ONLY — never
+  a sell/trim (you cannot sell what you do not hold). Do not invent holdings.
+
+SIZING for SMALL allocations:
+- If the allocation is small (e.g. under €100), propose just 1–2 BUYS that each use a
+  meaningful chunk of it, so each order is large enough to actually execute at a
+  broker (avoid sub-€1 dust orders). Quality over quantity.
+
 Be decisive but conservative; fewer, higher-conviction trades beat many marginal ones.
 You MUST call submit_candidates.""".strip()
 
@@ -263,6 +281,10 @@ Hard rules:
 - Attach a stop-loss (`stop_pct`, default `default_stop_pct`) to every kept BUY and
   mark it `protected` unless already cleared with an equal/tighter stop.
 - Recompute `pct_of_allocation` after any amount change.
+- REJECT any candidate that is not a real tradeable security: a market index or any
+  ticker starting with '^' (e.g. ^IXIC, ^GSPC) is NOT tradeable — verdict `rejected`.
+- REJECT any `sell`/`trim` whose ticker is not present in the user's holdings (a
+  fresh cash allocation has none) — you cannot sell what is not held.
 Be strict and deterministic. Every trade you return MUST have a verdict, a risk_note,
 and (for kept buys) a stop. You MUST call submit_risk_review.""".strip()
 

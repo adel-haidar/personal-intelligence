@@ -184,6 +184,7 @@ async def run_desk(run_id, user_id, config: dict, token: str | None = None) -> N
         risk = workers.RiskOfficer(bedrock_client=client, model_id=model_id)
         reviewed = await asyncio.to_thread(risk.evaluate, drafted, config)
         trade_rows = _to_trade_rows(reviewed.get("trades", []), config)
+        trade_rows = _sanitize_trades(trade_rows, positions)
         if trade_rows:
             await db.add_trades(run_id, user_id, trade_rows)
         kept = [t for t in trade_rows if t["kept"] and t["risk_verdict"] != "rejected"]
@@ -211,6 +212,28 @@ async def run_desk(run_id, user_id, config: dict, token: str | None = None) -> N
                                f"Run failed: {exc}")
         except Exception:
             pass
+
+
+def _sanitize_trades(rows: list[dict], positions: list[dict] | None) -> list[dict]:
+    """Last-line defence before trades are persisted/placed: reject anything the
+    broker can never fill, with a clear reason. Catches the LLM proposing a market
+    INDEX (^IXIC, ^GSPC, …) as a trade, or selling/trimming a name the user does
+    not actually hold (a fresh cash allocation holds nothing)."""
+    held = {(p.get("ticker") or "").strip().upper() for p in (positions or [])}
+    for r in rows:
+        ticker = (r.get("ticker") or "").strip()
+        reason = None
+        if not ticker or ticker.upper().startswith("^"):
+            reason = f"{ticker or '(empty)'} is a market index, not a tradeable instrument."
+        elif r.get("side") in ("sell", "trim") and ticker.upper() not in held:
+            reason = f"Cannot {r.get('side')} {ticker} — no existing position in it."
+        if reason:
+            r["risk_verdict"] = "rejected"
+            r["kept"] = False
+            r["status"] = "rejected"
+            note = (r.get("risk_note") or "").strip()
+            r["risk_note"] = (note + " " if note else "") + reason
+    return rows
 
 
 def _to_trade_rows(trades: list[dict], config: dict) -> list[dict]:
