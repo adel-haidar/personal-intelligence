@@ -528,16 +528,20 @@ export function useTradingDesk() {
   const isDone = computed(() => runStatus.value === 'done')
 
   // workspace: which panel to show
-  const workspace = computed<'setup' | 'working' | 'cards' | 'monitoring'>(() => {
+  const workspace = computed<'setup' | 'working' | 'cards' | 'monitoring' | 'error'>(() => {
     const s = runStatus.value
     if (!s) return 'setup'
     if (s === 'done') return 'monitoring'
     if (s === 'awaiting_approval') return 'cards'
-    // denied | cancelled | failed → back to setup
-    if (s === 'denied' || s === 'cancelled' || s === 'failed') return 'setup'
+    if (s === 'failed') return 'error'
+    // denied | cancelled → back to setup (user-initiated)
+    if (s === 'denied' || s === 'cancelled') return 'setup'
     // researching | drafting | evaluating | executing
     return 'working'
   })
+
+  // The failure reason from a failed run (shown in the error workspace).
+  const runError = computed<string | null>(() => currentRun.value?.error ?? null)
 
   // which stage is active based on run events + status
   const activeStage = computed<string>(() => {
@@ -590,6 +594,7 @@ export function useTradingDesk() {
     atApprovalGate,
     isDone,
     workspace,
+    runError,
     activeStage,
     stageStatus,
     keptNotional,

@@ -33,7 +33,11 @@ _DEFAULT_HOSTS = {
     "live": "https://live.trading212.com/api/v0",
 }
 
-_TIMEOUT = httpx.Timeout(20.0)
+_TIMEOUT = httpx.Timeout(15.0)
+# Worst-case wall-clock for a single _request (incl. 429 backoff). Must stay well
+# under nginx's 60s gateway timeout so a rate-limited call degrades, never 504s.
+_REQUEST_BUDGET = 35.0
+_MAX_ATTEMPTS = 3
 # Cache instruments per (environment) for the process lifetime; refresh lazily.
 _INSTRUMENT_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _INSTRUMENT_TTL = 60 * 60 * 6  # 6h
@@ -82,6 +86,9 @@ class Trading212Broker(BrokerAdapter):
     async def _request(self, method: str, path: str, *, json: dict | None = None) -> dict | list:
         url = f"{self._base}{path}"
         attempts = 0
+        # Hard wall-clock budget so a request can NEVER exceed nginx's gateway
+        # timeout (60s) — otherwise a rate-limited (429) call would 504 the page.
+        deadline = time.monotonic() + _REQUEST_BUDGET
         async with httpx.AsyncClient(timeout=_TIMEOUT, headers=self._headers) as client:
             while True:
                 attempts += 1
@@ -90,11 +97,22 @@ class Trading212Broker(BrokerAdapter):
                 except httpx.HTTPError as exc:
                     raise BrokerError(f"Trading 212 request failed: {exc}", code="network") from exc
 
-                if resp.status_code == 429 and attempts <= 4:
+                if resp.status_code == 429 and attempts <= _MAX_ATTEMPTS:
                     delay = self._retry_after(resp)
+                    # Don't sleep past the budget — give up cleanly instead of 504.
+                    if time.monotonic() + delay >= deadline:
+                        raise BrokerError(
+                            "Trading 212 is rate-limiting; please retry in a moment.",
+                            status=503, code="rate_limited",
+                        )
                     logger.warning("Trading 212 rate-limited; backing off %.1fs", delay)
                     await asyncio.sleep(delay)
                     continue
+                if resp.status_code == 429:
+                    raise BrokerError(
+                        "Trading 212 is rate-limiting; please retry in a moment.",
+                        status=503, code="rate_limited",
+                    )
 
                 if resp.status_code == 401 or resp.status_code == 403:
                     # Surface as 401-style auth failure (never 403 to the client).
@@ -124,8 +142,8 @@ class Trading212Broker(BrokerAdapter):
                     val = float(v)
                     # x-ratelimit-reset may be an epoch; normalise to a delay.
                     if val > time.time():
-                        return min(val - time.time(), 30.0)
-                    return min(val, 30.0)
+                        return min(val - time.time(), 10.0)
+                    return min(val, 10.0)
                 except ValueError:
                     pass
         return 2.0

@@ -431,6 +431,24 @@ _DEFAULT_RESERVE_FLOOR = 5000
 _DEFAULT_ALLOCATION = 25000
 _NON_TERMINAL = {"researching", "drafting", "evaluating", "awaiting_approval", "executing"}
 
+# Strong references to in-flight desk background tasks. asyncio only keeps WEAK
+# references to tasks, so a fire-and-forget create_task() can be garbage-collected
+# and silently cancelled mid-run. Hold a ref until the task finishes and log any
+# crash so a failed run is never silent.
+_DESK_TASKS: set = set()
+
+
+def _spawn_desk_task(coro) -> None:
+    task = asyncio.create_task(coro)
+    _DESK_TASKS.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _DESK_TASKS.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.error("Trading desk background task crashed", exc_info=t.exception())
+
+    task.add_done_callback(_done)
+
 
 class DeskConfigUpdate(BaseModel):
     account: Literal["paper", "live"] | None = None
@@ -614,7 +632,7 @@ async def desk_start_run(ident: dict = Depends(require_user)):
         reserve=reserve,
     )
     # Launch the orchestrator as a detached background task; the frontend polls.
-    asyncio.create_task(desk_coordinator.run_desk(run["id"], user_id, cfg, token=ident["token"]))
+    _spawn_desk_task(desk_coordinator.run_desk(run["id"], user_id, cfg, token=ident["token"]))
     return {"run": run, "events": [], "trades": []}
 
 
@@ -640,7 +658,7 @@ async def desk_approve_run(run_id: str, ident: dict = Depends(require_user)):
         raise HTTPException(status_code=400, detail="Run not found.")
     if run.get("status") != "awaiting_approval":
         raise HTTPException(status_code=400, detail="Run is not awaiting approval.")
-    asyncio.create_task(desk_coordinator.execute_run(run_id, user_id))
+    _spawn_desk_task(desk_coordinator.execute_run(run_id, user_id))
     return await _run_bundle(run_id, user_id)
 
 

@@ -10,7 +10,7 @@ import type { TradeStrategy, TradeMode, TradeAccount } from '../../composables/u
 const {
   configStatus, config, broker, portfolio, error, actionLoading, brokerLoading,
   currentRun, trades, events, atApprovalGate, isDone,
-  workspace, activeStage, stageStatus, keptNotional, keptCount,
+  workspace, runError, activeStage, stageStatus, keptNotional, keptCount,
   loadConfig, saveConfig, loadBroker, connectBroker, disconnectBroker,
   loadLatestRun, startRun, approveRun, denyRun, cancelRun,
   keepTrade, skipTrade, loadPortfolio, resetRun,
@@ -949,6 +949,30 @@ const latestEvent = computed(() => {
     </template>
 
     <!-- ─────────────────────────────────────────────────────────────────── -->
+    <!-- ERROR — the run failed                                               -->
+    <!-- ─────────────────────────────────────────────────────────────────── -->
+    <template v-if="activeWorkspace === 'error'">
+      <PiCard>
+        <div class="td-error-head">
+          <PIIcon name="shield" :size="18" style="color:var(--danger);flex:0 0 auto" />
+          <span class="td-card-title">The run couldn't finish</span>
+        </div>
+        <p class="td-error-msg">
+          {{ runError || 'The trading team hit an unexpected problem and stopped. No orders were placed.' }}
+        </p>
+        <div v-if="events.length" class="td-error-log">
+          <div v-for="ev in events" :key="ev.id" class="td-error-log__row">
+            <span class="t-mono td-error-log__agent">{{ ev.agent }}</span>
+            <span>{{ ev.message }}</span>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:var(--space-4);">
+          <PiButton variant="cta" icon="play" @click="handleReset">Try again</PiButton>
+        </div>
+      </PiCard>
+    </template>
+
+    <!-- ─────────────────────────────────────────────────────────────────── -->
     <!-- Live trading disclaimer modal overlay                               -->
     <!-- ─────────────────────────────────────────────────────────────────── -->
     <Teleport to="body">
@@ -1064,6 +1088,15 @@ const latestEvent = computed(() => {
 .td-alloc-cur { color: var(--text-tertiary); }
 .td-alloc-num { width: 120px; text-align: right; }
 .td-alloc-hint { font-size: var(--text-xs); color: var(--text-tertiary); margin: 0 0 var(--space-2); }
+.td-error-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
+.td-error-msg { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.6; margin: 0 0 var(--space-3); }
+.td-error-log {
+  display: flex; flex-direction: column; gap: var(--space-1);
+  background: var(--background-raised); border-radius: var(--radius-sm);
+  padding: var(--space-3); max-height: 220px; overflow-y: auto;
+}
+.td-error-log__row { display: flex; gap: var(--space-2); font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.5; }
+.td-error-log__agent { color: var(--text-tertiary); flex: 0 0 84px; }
 
 /* ── Card header ───────────────────────────────────────────────────────── */
 .td-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-4); flex-wrap: wrap; }
