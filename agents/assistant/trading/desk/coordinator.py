@@ -327,10 +327,21 @@ async def _place_one(broker, run_id, user_id, trade: dict, is_live: bool) -> Non
         raise BrokerError(f"No price to size {ticker}.", code="no_price")
 
     qty = amount / price
-    if side in ("sell", "trim"):
-        qty = -abs(qty)
-    else:
-        qty = abs(qty)
+    if is_live:
+        # Trading 212's API places WHOLE shares only — fractional quantities are
+        # rejected ('quantity-precision-mismatch: invalid quantity precision').
+        # Floor to an integer count and refuse clearly if the budget can't afford
+        # even one share.
+        shares = int(abs(qty))
+        if shares < 1:
+            raise BrokerError(
+                f"€{amount:.2f} can't buy one whole share of {ticker} "
+                f"(~€{price:.2f}/share). Trading 212 places whole shares only — "
+                f"raise the allocation or max-per-trade so one order affords a share.",
+                code="below_one_share",
+            )
+        qty = float(shares)
+    qty = -abs(qty) if side in ("sell", "trim") else abs(qty)
 
     intent_key = f"{run_id}:{trade['id']}"
     # On live, prefer market orders (reliable in beta); honour limit only on paper.

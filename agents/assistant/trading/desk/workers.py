@@ -43,26 +43,37 @@ logger = logging.getLogger(__name__)
 # intentionally excluded for now — their Yahoo symbols need exchange suffixes
 # (VUSA.L) and are quoted in GBp, which broke sizing ("No price to size VUSA").
 # The desk picks ONLY from this list, so every candidate is priceable + tradeable.
+# `approx_price` is a rough USD per-share level (a HINT for sizing whole-share
+# orders within a budget — Trading 212's API places WHOLE shares only, so a BUY
+# must afford at least one share). Execution still sizes on the LIVE price; this
+# is only so the strategist avoids proposing a €5 buy of a €900 share. Lower-priced
+# names are included so small allocations can still buy a whole share of something.
 TRADEABLE_UNIVERSE: list[dict] = [
-    {"ticker": "AAPL",  "name": "Apple",             "region": "us",     "asset_class": "equity"},
-    {"ticker": "MSFT",  "name": "Microsoft",         "region": "us",     "asset_class": "equity"},
-    {"ticker": "NVDA",  "name": "NVIDIA",            "region": "us",     "asset_class": "equity"},
-    {"ticker": "GOOGL", "name": "Alphabet",          "region": "us",     "asset_class": "equity"},
-    {"ticker": "AMZN",  "name": "Amazon",            "region": "us",     "asset_class": "equity"},
-    {"ticker": "META",  "name": "Meta Platforms",    "region": "us",     "asset_class": "equity"},
-    {"ticker": "TSLA",  "name": "Tesla",             "region": "us",     "asset_class": "equity"},
-    {"ticker": "AMD",   "name": "AMD",               "region": "us",     "asset_class": "equity"},
-    {"ticker": "JPM",   "name": "JPMorgan Chase",    "region": "us",     "asset_class": "equity"},
-    {"ticker": "V",     "name": "Visa",              "region": "us",     "asset_class": "equity"},
-    {"ticker": "JNJ",   "name": "Johnson & Johnson", "region": "us",     "asset_class": "equity"},
-    {"ticker": "PG",    "name": "Procter & Gamble",  "region": "us",     "asset_class": "equity"},
-    {"ticker": "KO",    "name": "Coca-Cola",         "region": "us",     "asset_class": "equity"},
-    {"ticker": "WMT",   "name": "Walmart",           "region": "us",     "asset_class": "equity"},
-    {"ticker": "XOM",   "name": "Exxon Mobil",       "region": "us",     "asset_class": "equity"},
-    {"ticker": "ASML",  "name": "ASML Holding",      "region": "europe", "asset_class": "equity"},
-    {"ticker": "SAP",   "name": "SAP SE",            "region": "europe", "asset_class": "equity"},
-    {"ticker": "NVO",   "name": "Novo Nordisk",      "region": "europe", "asset_class": "equity"},
-    {"ticker": "SHEL",  "name": "Shell plc",         "region": "europe", "asset_class": "equity"},
+    {"ticker": "F",     "name": "Ford Motor",        "region": "us",     "asset_class": "equity", "approx_price": 12},
+    {"ticker": "T",     "name": "AT&T",              "region": "us",     "asset_class": "equity", "approx_price": 23},
+    {"ticker": "PFE",   "name": "Pfizer",            "region": "us",     "asset_class": "equity", "approx_price": 26},
+    {"ticker": "INTC",  "name": "Intel",             "region": "us",     "asset_class": "equity", "approx_price": 30},
+    {"ticker": "BAC",   "name": "Bank of America",   "region": "us",     "asset_class": "equity", "approx_price": 42},
+    {"ticker": "CSCO",  "name": "Cisco",             "region": "us",     "asset_class": "equity", "approx_price": 55},
+    {"ticker": "SHEL",  "name": "Shell plc",         "region": "europe", "asset_class": "equity", "approx_price": 70},
+    {"ticker": "KO",    "name": "Coca-Cola",         "region": "us",     "asset_class": "equity", "approx_price": 70},
+    {"ticker": "WMT",   "name": "Walmart",           "region": "us",     "asset_class": "equity", "approx_price": 95},
+    {"ticker": "XOM",   "name": "Exxon Mobil",       "region": "us",     "asset_class": "equity", "approx_price": 115},
+    {"ticker": "NVO",   "name": "Novo Nordisk",      "region": "europe", "asset_class": "equity", "approx_price": 120},
+    {"ticker": "AMD",   "name": "AMD",               "region": "us",     "asset_class": "equity", "approx_price": 160},
+    {"ticker": "JNJ",   "name": "Johnson & Johnson", "region": "us",     "asset_class": "equity", "approx_price": 160},
+    {"ticker": "PG",    "name": "Procter & Gamble",  "region": "us",     "asset_class": "equity", "approx_price": 165},
+    {"ticker": "GOOGL", "name": "Alphabet",          "region": "us",     "asset_class": "equity", "approx_price": 185},
+    {"ticker": "AMZN",  "name": "Amazon",            "region": "us",     "asset_class": "equity", "approx_price": 200},
+    {"ticker": "JPM",   "name": "JPMorgan Chase",    "region": "us",     "asset_class": "equity", "approx_price": 215},
+    {"ticker": "SAP",   "name": "SAP SE",            "region": "europe", "asset_class": "equity", "approx_price": 230},
+    {"ticker": "AAPL",  "name": "Apple",             "region": "us",     "asset_class": "equity", "approx_price": 235},
+    {"ticker": "NVDA",  "name": "NVIDIA",            "region": "us",     "asset_class": "equity", "approx_price": 135},
+    {"ticker": "TSLA",  "name": "Tesla",             "region": "us",     "asset_class": "equity", "approx_price": 250},
+    {"ticker": "V",     "name": "Visa",              "region": "us",     "asset_class": "equity", "approx_price": 290},
+    {"ticker": "MSFT",  "name": "Microsoft",         "region": "us",     "asset_class": "equity", "approx_price": 450},
+    {"ticker": "META",  "name": "Meta Platforms",    "region": "us",     "asset_class": "equity", "approx_price": 580},
+    {"ticker": "ASML",  "name": "ASML Holding",      "region": "europe", "asset_class": "equity", "approx_price": 900},
 ]
 
 
@@ -217,10 +228,16 @@ SIDES — this desk is funded with NEW cash:
   in <current-positions>. If <current-positions> is empty, propose BUYS ONLY — never
   a sell/trim (you cannot sell what you do not hold). Do not invent holdings.
 
-SIZING for SMALL allocations:
-- If the allocation is small (e.g. under €100), propose just 1–2 BUYS that each use a
-  meaningful chunk of it, so each order is large enough to actually execute at a
-  broker (avoid sub-€1 dust orders). Quality over quantity.
+WHOLE-SHARE SIZING (critical — the broker places WHOLE shares only):
+- Each <tradeable-universe> entry has an `approx_price` (USD/share). A BUY can only
+  execute if its `amount` affords at least ONE whole share, i.e. amount ≳ approx_price.
+- For SMALL allocations, pick LOWER-priced names so a whole share fits the per-trade
+  budget (e.g. with €25 prefer F/T/PFE/INTC over AAPL/MSFT/ASML). Set each `amount`
+  to a whole-share multiple of approx_price (1 share, 2 shares, …), never a fraction
+  of a share's price.
+- If even the cheapest name's approx_price exceeds the per-trade budget, propose FEWER
+  trades (or a single one) concentrated enough to buy one whole share.
+- Prefer 1–2 high-conviction BUYS over many dust orders.
 
 Be decisive but conservative; fewer, higher-conviction trades beat many marginal ones.
 You MUST call submit_candidates.""".strip()
