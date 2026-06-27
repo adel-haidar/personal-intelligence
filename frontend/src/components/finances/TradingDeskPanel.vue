@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, computed, ref, watch } from 'vue'
+import { onMounted, computed, ref, watch, nextTick } from 'vue'
 import PiCard from '../ui/PiCard.vue'
 import PiButton from '../ui/PiButton.vue'
 import PIIcon from '../ui/PIIcon.vue'
@@ -18,6 +18,16 @@ const {
 
 // ── Setup panel: show/hide ────────────────────────────────────────────────────
 const showSetup = ref(false)
+const rootRef = ref<HTMLElement | null>(null)
+
+// Open (or close) the configuration screen. Explicit open + scroll-to-top so it's
+// always obvious something happened, even from the long approval-cards screen.
+function toggleConfigure() {
+  showSetup.value = !showSetup.value
+  if (showSetup.value) {
+    nextTick(() => rootRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
+}
 
 // ── Broker connect form ───────────────────────────────────────────────────────
 const brokerEnv = ref<'demo' | 'live'>('demo')
@@ -215,7 +225,7 @@ const latestEvent = computed(() => {
 </script>
 
 <template>
-  <div class="td-root">
+  <div class="td-root" ref="rootRef">
     <!-- ─────────────────────────────────────────────────────────────────── -->
     <!-- Section header                                                      -->
     <!-- ─────────────────────────────────────────────────────────────────── -->
@@ -272,8 +282,8 @@ const latestEvent = computed(() => {
           variant="ghost"
           size="compact"
           icon="settings"
-          @click="showSetup = !showSetup"
-        >Configure</PiButton>
+          @click="toggleConfigure"
+        >{{ showSetup ? 'Close' : 'Configure' }}</PiButton>
       </div>
     </div>
 

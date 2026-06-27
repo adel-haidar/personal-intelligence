@@ -323,7 +323,11 @@ export function useTradingDesk() {
       const bundle = await apiGet<RunBundle>(`/api/trading/desk/runs/${runId}`)
       runBundle.value = bundle
       const status = bundle.run?.status
-      if (status && !TERMINAL_STATUSES.includes(status)) {
+      // Keep polling only while the team is actively working. At the approval
+      // gate the run is quiescent (waiting on the user), so stop — otherwise we
+      // re-render every 1.5s for nothing, which can fight UI interactions.
+      const active = status && !TERMINAL_STATUSES.includes(status) && status !== 'awaiting_approval'
+      if (active) {
         pollTimer = setTimeout(() => pollRun(runId), 1500)
       }
     } catch {
