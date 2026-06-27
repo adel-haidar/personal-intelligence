@@ -66,6 +66,26 @@ function pct(v: number): string {
   return `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
 }
 
+// ── Order outcome (monitoring) ───────────────────────────────────────────────
+function orderStatusLabel(s: string): string {
+  return s === 'placed' ? 'Placed' : s === 'rejected' ? 'Not placed' : s === 'skipped' ? 'Skipped' : 'Pending'
+}
+function orderStatusStyle(s: string): string {
+  const map: Record<string, [string, string]> = {
+    placed:   ['var(--success-surface)', 'var(--success)'],
+    rejected: ['var(--danger-surface)', 'var(--danger)'],
+    skipped:  ['var(--background-raised)', 'var(--text-tertiary)'],
+    pending:  ['var(--accent-surface)', 'var(--accent-hover)'],
+  }
+  const [bg, c] = map[s] ?? map.pending
+  return `background:${bg};color:${c};`
+}
+// Execution-stage events (the broker's per-trade reasons + the final summary) —
+// surfaced so a run that placed nothing explains WHY.
+const executionNotes = computed(() =>
+  events.value.filter(e => e.stage === 'execute' && (e.type === 'report' || e.type === 'done')),
+)
+
 // ── Strategy change ───────────────────────────────────────────────────────────
 async function setStrategy(s: TradeStrategy) {
   config.value.strategy = s
@@ -928,10 +948,10 @@ const latestEvent = computed(() => {
 
         <!-- This run orders card -->
         <PiCard>
-          <div class="td-card-title" style="margin-bottom:var(--space-4)">This run · orders placed</div>
+          <div class="td-card-title" style="margin-bottom:var(--space-4)">This run · orders</div>
           <div class="td-fills">
             <div
-              v-for="trade in trades.filter(t => t.status === 'placed')"
+              v-for="trade in trades"
               :key="trade.id"
               class="td-fill-row"
             >
@@ -941,13 +961,21 @@ const latestEvent = computed(() => {
               >{{ trade.side.toUpperCase() }}</span>
               <span class="td-fill-ticker t-mono">{{ trade.ticker }}</span>
               <span class="t-secondary t-mono" style="font-size:var(--text-sm)">
-                {{ trade.filled_qty ?? '—' }} @ {{ trade.filled_price ? money(trade.filled_price) : '—' }}
+                {{ money(trade.amount) }}<template v-if="trade.status === 'placed'"> · {{ trade.filled_qty ?? '—' }} @ {{ trade.filled_price ? money(trade.filled_price) : 'pending fill' }}</template>
               </span>
-              <span class="pi-badge pi-badge--success" style="margin-left:auto">Filled</span>
+              <span class="pi-badge" :style="`margin-left:auto;${orderStatusStyle(trade.status)}`">{{ orderStatusLabel(trade.status) }}</span>
             </div>
-            <p v-if="!trades.some(t => t.status === 'placed')" class="t-tertiary" style="font-size:var(--text-sm)">
-              No orders filled yet.
+            <p v-if="!trades.length" class="t-tertiary" style="font-size:var(--text-sm)">
+              No trades in this run.
             </p>
+          </div>
+
+          <!-- Why orders didn't go through (broker reasons) -->
+          <div v-if="executionNotes.length && !trades.some(t => t.status === 'placed')" class="td-error-log" style="margin-top:var(--space-3)">
+            <div v-for="ev in executionNotes" :key="ev.id" class="td-error-log__row">
+              <span class="t-mono td-error-log__agent">{{ ev.agent }}</span>
+              <span>{{ ev.message }}</span>
+            </div>
           </div>
         </PiCard>
 
