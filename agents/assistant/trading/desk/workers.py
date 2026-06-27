@@ -35,6 +35,41 @@ def _jsonable(o):
 
 logger = logging.getLogger(__name__)
 
+# Curated universe of liquid, broadly-available instruments that reliably resolve
+# on Trading 212 (the snapshot only carries INDICES, so without this the model
+# invents untradeable tickers like 'NXUS'). US single stocks are available to EU
+# retail and resolve by their plain ticker; ETFs here are UCITS (PRIIPs-compliant
+# for EU accounts — US-domiciled ETFs like SPY/QQQ are NOT available to EU retail).
+# The desk picks ONLY from this list, so every candidate is tradeable.
+TRADEABLE_UNIVERSE: list[dict] = [
+    {"ticker": "AAPL",  "name": "Apple",                 "region": "us",     "asset_class": "equity"},
+    {"ticker": "MSFT",  "name": "Microsoft",             "region": "us",     "asset_class": "equity"},
+    {"ticker": "NVDA",  "name": "NVIDIA",                "region": "us",     "asset_class": "equity"},
+    {"ticker": "GOOGL", "name": "Alphabet",              "region": "us",     "asset_class": "equity"},
+    {"ticker": "AMZN",  "name": "Amazon",                "region": "us",     "asset_class": "equity"},
+    {"ticker": "META",  "name": "Meta Platforms",        "region": "us",     "asset_class": "equity"},
+    {"ticker": "TSLA",  "name": "Tesla",                 "region": "us",     "asset_class": "equity"},
+    {"ticker": "AMD",   "name": "AMD",                   "region": "us",     "asset_class": "equity"},
+    {"ticker": "JPM",   "name": "JPMorgan Chase",        "region": "us",     "asset_class": "equity"},
+    {"ticker": "V",     "name": "Visa",                  "region": "us",     "asset_class": "equity"},
+    {"ticker": "JNJ",   "name": "Johnson & Johnson",     "region": "us",     "asset_class": "equity"},
+    {"ticker": "PG",    "name": "Procter & Gamble",      "region": "us",     "asset_class": "equity"},
+    {"ticker": "KO",    "name": "Coca-Cola",             "region": "us",     "asset_class": "equity"},
+    {"ticker": "WMT",   "name": "Walmart",               "region": "us",     "asset_class": "equity"},
+    {"ticker": "XOM",   "name": "Exxon Mobil",           "region": "us",     "asset_class": "equity"},
+    {"ticker": "ASML",  "name": "ASML Holding",          "region": "europe", "asset_class": "equity"},
+    {"ticker": "SAP",   "name": "SAP SE",                "region": "europe", "asset_class": "equity"},
+    {"ticker": "NVO",   "name": "Novo Nordisk",          "region": "europe", "asset_class": "equity"},
+    {"ticker": "SHEL",  "name": "Shell plc",             "region": "europe", "asset_class": "equity"},
+    {"ticker": "VUSA",  "name": "Vanguard S&P 500 UCITS ETF",       "region": "europe", "asset_class": "etf"},
+    {"ticker": "VWRL",  "name": "Vanguard FTSE All-World UCITS ETF", "region": "europe", "asset_class": "etf"},
+    {"ticker": "EQQQ",  "name": "Invesco Nasdaq-100 UCITS ETF",     "region": "europe", "asset_class": "etf"},
+]
+
+
+def _universe_text() -> str:
+    return json.dumps(TRADEABLE_UNIVERSE, ensure_ascii=False)
+
 
 # ── Analyst ──────────────────────────────────────────────────────────────────
 
@@ -75,11 +110,15 @@ _ANALYST_SYSTEM = """You are the ANALYST on a multi-agent trading desk.
 
 Read the live <market-snapshot> (quotes + headlines fetched minutes ago — your ONLY
 real market data; never invent prices), the user's profile, and any strategy notes.
-Emit 3-8 directional SIGNALS on liquid, broadly tradeable names, each tied to a
-concrete headline or index move in the snapshot (cite it in `evidence`). Spread across
-regions when the data supports it. Give a crisp `market_read` (used as the run
-headline). If the snapshot is degraded, lower conviction and say so. Respect the
-user's universe/asset preferences if provided. You MUST call submit_signals.""".strip()
+Emit 3-8 directional SIGNALS, each tied to a concrete headline or index move in the
+snapshot (cite it in `evidence`). Give a crisp `market_read` (used as the run
+headline). If the snapshot is degraded, lower conviction and say so.
+
+CRITICAL — every signal's `ticker` MUST be chosen from the <tradeable-universe> list
+provided in the message (use its exact `ticker`). These are the only instruments the
+desk can actually trade. NEVER invent a ticker and NEVER use a market index symbol
+(anything starting with '^' such as ^IXIC/^GSPC) — indices are context only, not
+tradeable. You MUST call submit_signals.""".strip()
 
 
 class Analyst(BaseLLMService):
@@ -89,6 +128,7 @@ class Analyst(BaseLLMService):
             parts.append(profile)
         if strategy_ctx:
             parts.append(f"<strategy-context>\n{strategy_ctx}\n</strategy-context>")
+        parts.append(f"<tradeable-universe>\n{_universe_text()}\n</tradeable-universe>")
         parts.append(
             "<market-snapshot>\n"
             f"{json.dumps(snapshot, ensure_ascii=False, indent=1, default=_jsonable)}\n"
@@ -163,14 +203,15 @@ rules (stated in <desk-config>):
 - `pct_of_allocation` must equal amount / allocation * 100, rounded sensibly.
 - Prefer order_type=market unless a limit is clearly justified (set limit_price then).
 
-TRADEABILITY — every candidate MUST be a real, individually tradeable security:
-- ONLY individual stocks or ETFs that exist on a retail broker (e.g. AAPL, MSFT,
-  NVDA, ASML, VWCE, SXR8). Use the plain exchange ticker only.
-- NEVER propose a market INDEX or an index quote as a trade. The <market-snapshot>
-  indices (symbols like ^IXIC, ^GSPC, ^DJI, ^GDAXI, ^STOXX50E, ^FTSE, ^STI, …, or
-  anything starting with '^') are CONTEXT ONLY — they show market direction and are
-  NOT buyable/sellable. If you want index exposure, use a real ETF ticker instead.
-- No ticker may start with '^' or be a currency/commodity index.
+TRADEABILITY — this is the most important rule:
+- Every candidate's `ticker` MUST be copied EXACTLY from the <tradeable-universe>
+  list in the message. That list is the ONLY set of instruments the broker can fill.
+- NEVER invent a ticker, and NEVER use a name not in that list (no 'NXUS', no random
+  symbols). If you are unsure a name is tradeable, it is not — only the list is.
+- NEVER propose a market INDEX. The <market-snapshot> indices (^IXIC, ^GSPC, ^DJI,
+  ^GDAXI, ^STOXX50E, ^FTSE, ^STI, … anything starting with '^') are CONTEXT ONLY —
+  they show market direction and are NOT tradeable. For index-like exposure use one
+  of the ETF tickers in the universe.
 
 SIDES — this desk is funded with NEW cash:
 - Default to `buy`. Only use `sell`/`trim` to reduce a position that ACTUALLY appears
@@ -199,6 +240,7 @@ class Strategist(BaseLLMService):
         }
         parts = [
             f"<desk-config>\n{json.dumps(desk_config, ensure_ascii=False, default=_jsonable)}\n</desk-config>",
+            f"<tradeable-universe>\n{_universe_text()}\n</tradeable-universe>",
             f"<signals>\n{json.dumps(signals, ensure_ascii=False, default=_jsonable)}\n</signals>",
             f"<current-positions>\n{json.dumps(positions or [], ensure_ascii=False, default=_jsonable)}\n</current-positions>",
             "<market-snapshot>\n"
@@ -274,7 +316,10 @@ Review every candidate trade against the GUARDRAILS in <desk-config> and assign 
                 even after trimming, crypto over the cap, or would breach the reserve floor).
 
 Hard rules:
-- No single trade may exceed `max_trade_pct`% of the allocation — trim or reject.
+- A trade whose `pct_of_allocation` is AT OR BELOW `max_trade_pct` is COMPLIANT on
+  size — clear it, do not trim or reject it for size. Only when it STRICTLY EXCEEDS
+  `max_trade_pct` do you trim it down to the cap (or reject if that's impossible).
+  (e.g. with max_trade_pct=10, a trade at exactly 10% is fine.)
 - Sum of all non-rejected BUY amounts must keep cash above the `reserve_floor`
   (allocation minus reserve is the deployable ceiling) and respect the day-loss budget.
 - Crypto exposure must stay within `crypto_pct`% of allocation.

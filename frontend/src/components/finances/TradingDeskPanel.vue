@@ -180,9 +180,13 @@ async function handleStart() {
   showSetup.value = false
 }
 
-function handleReset() {
+async function handleReset() {
   resetRun()
   showSetup.value = false
+  // "Start a new run" / "Try again" should actually launch a run, then bring the
+  // working view into sight (the buttons live at the bottom of the page).
+  await startRun()
+  nextTick(() => rootRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 }
 
 // ── Trade side color ─────────────────────────────────────────────────────────
