@@ -261,6 +261,22 @@ class Trading212Broker(BrokerAdapter):
             data = await self._request("POST", "/equity/orders/limit", json=body)
         return self._order_dict(data if isinstance(data, dict) else {})
 
+    async def place_stop_order(
+        self, ticker: str, quantity: float, stop_price: float, *, intent_key: str | None = None
+    ) -> dict:
+        """Place a resting protective STOP order. quantity<0 = sell-stop (fires when
+        price falls to stop_price). GTC so it keeps protecting the position between
+        the desk's review cycles. Whole shares only, like every other T212 order."""
+        body = {
+            "ticker": ticker,
+            "quantity": quantity,
+            "stopPrice": round(float(stop_price), 2),
+            "timeValidity": "GTC",
+        }
+        async with self._lock(intent_key):
+            data = await self._request("POST", "/equity/orders/stop", json=body)
+        return self._order_dict(data if isinstance(data, dict) else {})
+
     async def get_order(self, order_id: str) -> dict:
         data = await self._request("GET", f"/equity/orders/{order_id}")
         return self._order_dict(data if isinstance(data, dict) else {})

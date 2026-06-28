@@ -168,6 +168,18 @@ class PaperBroker(BrokerAdapter):
         )
         return await self._fill(ticker, quantity, fill_price, name=None)
 
+    async def place_stop_order(
+        self, ticker: str, quantity: float, stop_price: float, *, intent_key: str | None = None
+    ) -> dict:
+        # Paper has no real resting order book; record a synthetic stop id. The
+        # review cycle enforces the stop synthetically (price <= stop_price → sell).
+        return {
+            "id": f"paper-stop-{uuid.uuid4().hex[:16]}",
+            "status": "new",
+            "ticker": ticker,
+            "stop_price": round(float(stop_price), 6),
+        }
+
     async def get_order(self, order_id: str) -> dict:
         # Paper orders fill instantly; nothing to poll.
         return {"id": order_id, "status": "FILLED"}

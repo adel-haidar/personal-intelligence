@@ -139,6 +139,39 @@ CREATE TABLE IF NOT EXISTS trading_paper_account (
     starting_balance NUMERIC NOT NULL DEFAULT 100000,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Autonomy (mirror of migrations/0027_trading_autonomy.sql) ---------------------
+CREATE TABLE IF NOT EXISTS trading_position_plan (
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id              UUID NOT NULL,
+    account              TEXT NOT NULL,
+    ticker               TEXT NOT NULL,
+    qty                  NUMERIC,
+    entry_price          NUMERIC,
+    stop_price           NUMERIC,
+    target_price         NUMERIC,
+    thesis               TEXT,
+    status               TEXT NOT NULL DEFAULT 'open',
+    broker_stop_order_id TEXT,
+    opened_run_id        UUID,
+    closed_run_id        UUID,
+    realized_pl          NUMERIC,
+    opened_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    closed_at            TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_trading_plan_user_open
+    ON trading_position_plan (user_id, account, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_trading_plan_open
+    ON trading_position_plan (user_id, account, ticker) WHERE status = 'open';
+
+ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS autonomous BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS paused_until TIMESTAMPTZ;
+ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS day_baseline_equity NUMERIC;
+ALTER TABLE trading_config ADD COLUMN IF NOT EXISTS day_baseline_date DATE;
+ALTER TABLE trading_trade ADD COLUMN IF NOT EXISTS stop_pct NUMERIC;
+ALTER TABLE trading_trade ADD COLUMN IF NOT EXISTS stop_price NUMERIC;
+ALTER TABLE trading_trade ADD COLUMN IF NOT EXISTS exit_qty NUMERIC;
 """
 
 _pool: Optional[asyncpg.Pool] = None
@@ -206,7 +239,8 @@ async def get_config(user_id) -> Optional[dict]:
         # MUST SCOPE BY USER
         row = await conn.fetchrow(
             "SELECT user_id, account, strategy, mode, allocation, reserve_floor, "
-            "universe, guardrails, updated_at FROM trading_config "
+            "universe, guardrails, autonomous, paused_until, day_baseline_equity, "
+            "day_baseline_date, updated_at FROM trading_config "
             "WHERE user_id IS NOT DISTINCT FROM $1::uuid",
             _uid(user_id),
         )
@@ -224,24 +258,66 @@ async def upsert_config(user_id, **fields) -> dict:
         _dec(fields.get("reserve_floor")),
         fields.get("universe"),
         fields.get("guardrails"),
+        bool(fields.get("autonomous", False)),
     )
     async with pool.acquire() as conn:
-        # MUST SCOPE BY USER — UPDATE-then-INSERT (NULL user_id can't ON CONFLICT)
+        # MUST SCOPE BY USER — UPDATE-then-INSERT (NULL user_id can't ON CONFLICT).
+        # Note: paused_until / day_baseline_* are owned by the cycle (set_config_flags),
+        # so this upsert deliberately never touches them.
         updated = await conn.fetchrow(
             "UPDATE trading_config SET account=$2, strategy=$3, mode=$4, "
             "allocation=$5, reserve_floor=$6, universe=$7, guardrails=$8, "
-            "updated_at=NOW() WHERE user_id IS NOT DISTINCT FROM $1::uuid RETURNING *",
+            "autonomous=$9, updated_at=NOW() "
+            "WHERE user_id IS NOT DISTINCT FROM $1::uuid RETURNING *",
             *args,
         )
         if updated:
             return dict(updated)
         inserted = await conn.fetchrow(
             "INSERT INTO trading_config (user_id, account, strategy, mode, "
-            "allocation, reserve_floor, universe, guardrails) "
-            "VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8) RETURNING *",
+            "allocation, reserve_floor, universe, guardrails, autonomous) "
+            "VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
             *args,
         )
         return dict(inserted)
+
+
+async def set_config_flags(user_id, **fields) -> None:
+    """Set cycle-owned config columns (paused_until, day_baseline_equity,
+    day_baseline_date, autonomous) without disturbing the user-edited config."""
+    allowed = {"paused_until", "day_baseline_equity", "day_baseline_date", "autonomous"}
+    numeric = {"day_baseline_equity"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    pool = await _get_pool()
+    sets, args = [], []
+    for i, (k, v) in enumerate(updates.items(), start=1):
+        args.append(_dec(v) if k in numeric else v)
+        sets.append(f"{k}=${i}")
+    args.append(_uid(user_id))
+    async with pool.acquire() as conn:
+        # MUST SCOPE BY USER
+        await conn.execute(
+            f"UPDATE trading_config SET {', '.join(sets)} "
+            f"WHERE user_id IS NOT DISTINCT FROM ${len(args)}::uuid",
+            *args,
+        )
+
+
+async def list_autonomous_users() -> list:
+    """user_ids that opted into autonomous live trading AND have a connected live
+    Trading 212 key. The 30-min cycle fans over exactly these (cost + safety gate)."""
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT c.user_id FROM trading_config c "
+            "JOIN trading_broker_connection b "
+            "  ON b.user_id IS NOT DISTINCT FROM c.user_id AND b.provider='trading212' "
+            "WHERE c.autonomous = TRUE AND c.account = 'live' "
+            "  AND b.environment = 'live' AND b.api_key_enc IS NOT NULL"
+        )
+        return [r["user_id"] for r in rows]
 
 
 # ── broker connection ────────────────────────────────────────────────────────
@@ -416,8 +492,8 @@ async def add_trades(run_id, user_id, trades: list[dict]) -> list[dict]:
             row = await conn.fetchrow(
                 "INSERT INTO trading_trade (run_id, user_id, ticker, name, side, amount, "
                 "pct_of_allocation, headline, reasoning, evidence, risk_verdict, risk_note, "
-                "kept, status, order_type, limit_price) VALUES "
-                "($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *",
+                "kept, status, order_type, limit_price, stop_pct, stop_price, exit_qty) VALUES "
+                "($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *",
                 str(run_id), _uid(user_id),
                 t.get("ticker"), t.get("name"), t.get("side"),
                 _dec(t.get("amount")), _dec(t.get("pct_of_allocation")),
@@ -425,6 +501,7 @@ async def add_trades(run_id, user_id, trades: list[dict]) -> list[dict]:
                 t.get("risk_verdict"), t.get("risk_note"),
                 bool(t.get("kept", True)), t.get("status") or "pending",
                 t.get("order_type"), _dec(t.get("limit_price")),
+                _dec(t.get("stop_pct")), _dec(t.get("stop_price")), _dec(t.get("exit_qty")),
             )
             out.append(dict(row))
     return out
@@ -527,4 +604,79 @@ async def upsert_position(user_id, account, ticker, name, qty, avg_price, asset_
             "name=EXCLUDED.name, qty=EXCLUDED.qty, avg_price=EXCLUDED.avg_price, "
             "asset_class=EXCLUDED.asset_class, updated_at=NOW()",
             _uid(user_id), account, ticker, name, _dec(qty), _dec(avg_price), asset_class,
+        )
+
+
+# ── position plans (autonomy: the exit-thesis "notes" read back each cycle) ─────
+
+async def list_open_plans(user_id, account) -> list[dict]:
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        # MUST SCOPE BY USER
+        rows = await conn.fetch(
+            "SELECT * FROM trading_position_plan WHERE user_id IS NOT DISTINCT FROM $1::uuid "
+            "AND account=$2 AND status='open' ORDER BY ticker ASC",
+            _uid(user_id), account,
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_open_plan(user_id, account, ticker) -> Optional[dict]:
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        # MUST SCOPE BY USER
+        row = await conn.fetchrow(
+            "SELECT * FROM trading_position_plan WHERE user_id IS NOT DISTINCT FROM $1::uuid "
+            "AND account=$2 AND ticker=$3 AND status='open'",
+            _uid(user_id), account, ticker,
+        )
+        return dict(row) if row else None
+
+
+async def upsert_open_plan(user_id, account, ticker, **fields) -> dict:
+    """Create or update the OPEN plan for a (user, account, ticker). Only the
+    provided fields are written; unset ones keep their value (COALESCE)."""
+    pool = await _get_pool()
+    cols = ("qty", "entry_price", "stop_price", "target_price", "thesis",
+            "broker_stop_order_id", "opened_run_id")
+    numeric = {"qty", "entry_price", "stop_price", "target_price"}
+    vals = {}
+    for c in cols:
+        if c in fields:
+            vals[c] = _dec(fields[c]) if c in numeric else fields[c]
+    async with pool.acquire() as conn:
+        # MUST SCOPE BY USER — UPDATE the open row, else INSERT (partial unique index
+        # on status='open' prevents two open rows for the same ticker).
+        set_parts = [f"{c}=COALESCE(${i+3}, {c})" for i, c in enumerate(cols)]
+        update_args = [_uid(user_id), account, ticker] + [vals.get(c) for c in cols]
+        updated = await conn.fetchrow(
+            f"UPDATE trading_position_plan SET {', '.join(set_parts)}, updated_at=NOW() "
+            "WHERE user_id IS NOT DISTINCT FROM $1::uuid AND account=$2 AND ticker=$3 "
+            "AND status='open' RETURNING *",
+            *update_args,
+        )
+        if updated:
+            return dict(updated)
+        ins_cols = ["user_id", "account", "ticker"] + list(cols)
+        placeholders = ["$1::uuid", "$2", "$3"] + [f"${i+4}" for i in range(len(cols))]
+        ins_args = [_uid(user_id), account, ticker] + [vals.get(c) for c in cols]
+        inserted = await conn.fetchrow(
+            f"INSERT INTO trading_position_plan ({', '.join(ins_cols)}) "
+            f"VALUES ({', '.join(placeholders)}) RETURNING *",
+            *ins_args,
+        )
+        return dict(inserted)
+
+
+async def close_plan(user_id, account, ticker, closed_run_id=None, realized_pl=None) -> None:
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        # MUST SCOPE BY USER
+        await conn.execute(
+            "UPDATE trading_position_plan SET status='closed', closed_at=NOW(), "
+            "closed_run_id=$4::uuid, realized_pl=$5 "
+            "WHERE user_id IS NOT DISTINCT FROM $1::uuid AND account=$2 AND ticker=$3 "
+            "AND status='open'",
+            _uid(user_id), account, ticker,
+            str(closed_run_id) if closed_run_id else None, _dec(realized_pl),
         )

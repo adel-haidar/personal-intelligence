@@ -67,6 +67,14 @@ class BrokerAdapter(ABC):
         """Place a DAY limit order. Returns the same shape as place_market_order."""
 
     @abstractmethod
+    async def place_stop_order(
+        self, ticker: str, quantity: float, stop_price: float, *, intent_key: str | None = None
+    ) -> dict:
+        """Place a resting STOP order (protective). quantity<0 is a sell-stop that
+        fires when the price falls to stop_price. Returns an order dict with at least
+        {"id", "status"}. Used to protect a live position between review cycles."""
+
+    @abstractmethod
     async def get_order(self, order_id: str) -> dict:
         """Fetch an order's current state (status, filled qty/price)."""
 

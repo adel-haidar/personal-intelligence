@@ -350,6 +350,85 @@ Be strict and deterministic. Every trade you return MUST have a verdict, a risk_
 and (for kept buys) a stop. You MUST call submit_risk_review.""".strip()
 
 
+# ── Position Manager (the exit brain for the autonomous review cycle) ──────────
+
+_POSITION_TOOL = {
+    "name": "submit_position_actions",
+    "description": "Decide what to do with each currently-open position this cycle.",
+    "inputSchema": {
+        "json": {
+            "type": "object",
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "ticker": {"type": "string"},
+                            "action": {"type": "string", "enum": ["hold", "sell", "trim"]},
+                            "trim_pct": {
+                                "type": ["number", "null"],
+                                "description": "If action=trim, the % of the position to sell (1-100).",
+                            },
+                            "new_stop_pct": {
+                                "type": ["number", "null"],
+                                "description": "Revised stop as % below the CURRENT price (e.g. raise to lock gains). Null = unchanged.",
+                            },
+                            "updated_thesis": {
+                                "type": "string",
+                                "description": "The refreshed exit plan to carry into the next cycle.",
+                            },
+                            "reasoning": {"type": "string"},
+                        },
+                        "required": ["ticker", "action", "updated_thesis", "reasoning"],
+                    },
+                },
+            },
+            "required": ["actions"],
+        }
+    },
+}
+
+_POSITION_SYSTEM = """You are the POSITION MANAGER on an autonomous trading desk. The desk
+re-runs every ~30 minutes during market hours. Your job is to manage OPEN positions: decide
+whether to HOLD, SELL (exit fully), or TRIM each one, and to keep its exit plan current.
+
+You are given <open-positions>: each carries the original exit `thesis` (when/why to sell),
+`entry_price`, `stop_price`, `target_price`, the live `current_price`, and unrealised P&L.
+You also get the fresh <market-read> from today's analyst.
+
+Decide per position:
+- `sell`  — the thesis is met or invalidated: target reached, catalyst played out, the reason
+            to own it is gone, or the market read turned against it. Exit fully.
+- `trim`  — take partial profit / reduce risk but keep exposure (set `trim_pct`).
+- `hold`  — thesis intact; optionally raise the stop via `new_stop_pct` to lock in gains
+            (trailing). Never loosen a stop.
+
+Always restate the plan in `updated_thesis` (it becomes the note the NEXT cycle reads). Be
+decisive and disciplined: honour the original thesis, take profits at/near target, cut losers
+that breached their reason-to-own. The hard stop already protects against crashes — your job is
+the discretionary/target/thesis exits. You MUST call submit_position_actions (one entry per
+open position; if there are none, return an empty list).""".strip()
+
+
+class PositionManager(BaseLLMService):
+    def review(self, positions: list[dict], market_read: str = "") -> dict:
+        parts = [
+            f"<market-read>\n{market_read}\n</market-read>",
+            f"<open-positions>\n{json.dumps(positions or [], ensure_ascii=False, default=_jsonable)}\n</open-positions>",
+            f"Today's date: {date.today().isoformat()}",
+        ]
+        return invoke_with_tool_retry(
+            client=self._client,
+            model_id=self._model_id,
+            system_prompt=_POSITION_SYSTEM,
+            messages=[{"role": "user", "content": [{"text": "\n\n".join(parts)}]}],
+            tool_spec=_POSITION_TOOL,
+            max_tokens=4096,
+            max_retries=2,
+        )
+
+
 class RiskOfficer(BaseLLMService):
     def evaluate(self, candidates: dict, config: dict) -> dict:
         guardrails = config.get("guardrails") or {}

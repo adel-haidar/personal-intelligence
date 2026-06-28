@@ -1,0 +1,13 @@
+[Unit]
+Description=Fire the autonomous trading desk review cycle every 30 minutes
+
+[Timer]
+# Every 30 min, Mon-Fri, 13:00-21:30 UTC — a superset of US market hours across
+# EST and EDT. The endpoint's is_market_open() (America/New_York) is the precise
+# gate, so off-session firings are cheap no-ops. Not Persistent: never backfill a
+# missed trading window after the box was down.
+OnCalendar=Mon..Fri *-*-* 13..21:00/30
+Persistent=false
+
+[Install]
+WantedBy=timers.target

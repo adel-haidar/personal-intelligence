@@ -6,7 +6,8 @@ import boto3
 import os
 
 from calendar import monthrange
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as dt_time, timezone
+from zoneinfo import ZoneInfo
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -26,7 +27,7 @@ from assistant.trading.desk.brokers.trading212 import Trading212Broker
 from assistant.trading.desk.crypto import encrypt
 from assistant.health.router import router as health_router
 from assistant.job.router import router as job_router
-from assistant.shared.auth import require_user
+from assistant.shared.auth import require_auth, require_user
 from assistant.shared.memory_client import MemoryClient
 from assistant.shared.settings import Settings, get_settings
 from assistant.shared.user_profile import build_user_profile
@@ -459,6 +460,20 @@ class DeskConfigUpdate(BaseModel):
     reserve_floor: float | None = None
     universe: list | dict | None = None
     guardrails: dict | None = None
+    autonomous: bool | None = None
+
+
+# US equity regular hours, resolved in America/New_York so DST is handled. The
+# autonomous cycle is gated on this — the universe is US-listed, so trading when
+# the market is shut just queues orders (and wastes a Bedrock run).
+_NY_TZ = ZoneInfo("America/New_York")
+
+
+def is_market_open(now: datetime | None = None) -> bool:
+    now_ny = (now or datetime.now(timezone.utc)).astimezone(_NY_TZ)
+    if now_ny.weekday() >= 5:  # Saturday / Sunday
+        return False
+    return dt_time(9, 30) <= now_ny.time() <= dt_time(16, 0)
 
 
 class BrokerUpdate(BaseModel):
@@ -478,6 +493,7 @@ def _seeded_config(user_id, strategy: str = _DEFAULT_STRATEGY) -> dict:
         "reserve_floor": _DEFAULT_RESERVE_FLOOR,
         "universe": [],
         "guardrails": dict(_STRATEGY_GUARDRAILS[strategy]),
+        "autonomous": False,
     }
 
 
@@ -510,6 +526,7 @@ async def desk_put_config(body: DeskConfigUpdate, ident: dict = Depends(require_
         "reserve_floor": fields.get("reserve_floor", current.get("reserve_floor", _DEFAULT_RESERVE_FLOOR)),
         "universe": fields.get("universe", current.get("universe", [])),
         "guardrails": fields.get("guardrails", current.get("guardrails", dict(_STRATEGY_GUARDRAILS[_DEFAULT_STRATEGY]))),
+        "autonomous": fields.get("autonomous", current.get("autonomous", False)),
     }
     return await trading_db.upsert_config(user_id, **merged)
 
@@ -759,6 +776,57 @@ async def desk_skip_trade(trade_id: str, ident: dict = Depends(require_user)):
     return await _set_trade_kept_and_return(trade_id, ident["user_id"], False)
 
 
+@app.post("/api/trading/desk/cycle/run")
+async def desk_run_cycle(
+    user_id: str | None = None,
+    force: bool = False,
+    _ident: str = Depends(require_auth),  # internal/admin only (INTERNAL_SECRET ok)
+):
+    """Run the autonomous review cycle. Triggered every 30 min by the systemd timer,
+    which fans it over every opted-in user (`list_autonomous_users`). Returns
+    immediately; each user's cycle runs as a background task.
+
+    - No `user_id`: fan over all autonomous users, but no-op outside US market hours
+      (unless `force=true`).
+    - `user_id=<id>`: run ONE user's cycle now (paper testing / manual kick), ignoring
+      the market-hours and autonomous-opt-in gates. Internal callers only.
+
+    Memory token is intentionally NOT forwarded per-user here (the internal secret
+    resolves to the seed admin in Service A); the cycle trades off the live market +
+    guardrails + the user's own open positions, never another tenant's memory.
+    """
+    if user_id:
+        _spawn_desk_task(desk_coordinator.review_cycle(user_id, token=None))
+        return {"status": "started", "users": 1, "targeted": True}
+    if not force and not is_market_open():
+        return {"status": "skipped", "reason": "market_closed"}
+    user_ids = await trading_db.list_autonomous_users()
+    for uid in user_ids:
+        _spawn_desk_task(desk_coordinator.review_cycle(uid, token=None))
+    return {"status": "started", "users": len(user_ids)}
+
+
+def _is_paused(cfg: dict | None) -> bool:
+    """True while the daily-loss circuit breaker has new buys paused for the day."""
+    pu = (cfg or {}).get("paused_until")
+    return bool(pu and datetime.now(timezone.utc) < pu)
+
+
+def _plan_public(plan: dict) -> dict:
+    """Public shape of a managed-position plan (stop/target/thesis) for the UI."""
+    def _num(x):
+        return float(x) if x is not None else None
+    return {
+        "ticker": plan.get("ticker"),
+        "qty": _num(plan.get("qty")),
+        "entry_price": _num(plan.get("entry_price")),
+        "stop_price": _num(plan.get("stop_price")),
+        "target_price": _num(plan.get("target_price")),
+        "thesis": plan.get("thesis"),
+        "opened_at": plan.get("opened_at").isoformat() if plan.get("opened_at") else None,
+    }
+
+
 @app.get("/api/trading/desk/portfolio")
 async def desk_portfolio(ident: dict = Depends(require_user)):
     user_id = ident["user_id"]
@@ -794,6 +862,7 @@ async def desk_portfolio(ident: dict = Depends(require_user)):
         for h in holdings:
             if h["value"] and total:
                 h["pct"] = round(h["value"] / total * 100, 2)
+        plans = await trading_db.list_open_plans(user_id, "paper")
         return {
             "account": "paper",
             "value": total,
@@ -801,6 +870,9 @@ async def desk_portfolio(ident: dict = Depends(require_user)):
             "day_change": None,
             "since_funded": round(total - starting, 2),
             "holdings": holdings,
+            "autonomous": bool((cfg or {}).get("autonomous")),
+            "paused": _is_paused(cfg),
+            "managed_positions": [_plan_public(p) for p in plans],
         }
 
     # Live → Trading 212.
@@ -823,6 +895,7 @@ async def desk_portfolio(ident: dict = Depends(require_user)):
     } for p in positions]
     free = cash.get("free") or 0
     total = cash.get("total") or free
+    plans = await trading_db.list_open_plans(user_id, "live")
     return {
         "account": "live",
         "value": total,
@@ -830,4 +903,7 @@ async def desk_portfolio(ident: dict = Depends(require_user)):
         "day_change": None,
         "since_funded": None,
         "holdings": holdings,
+        "autonomous": bool((cfg or {}).get("autonomous")),
+        "paused": _is_paused(cfg),
+        "managed_positions": [_plan_public(p) for p in plans],
     }

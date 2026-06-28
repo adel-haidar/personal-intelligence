@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the autonomous Agent Trading Desk review cycle (manage exits + new entries)
+After=network.target personal-intelligence-agents.service
+Wants=personal-intelligence-agents.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/home/ec2-user/personal-intelligence/.env
+# Desk routes are on the agents service (8001, internal). Auth uses the stable
+# INTERNAL_SECRET (require_auth accepts it) so the timer never breaks on token
+# expiry. The endpoint fans the cycle over every autonomous user and returns
+# immediately; it no-ops outside US market hours (server-side is_market_open gate).
+ExecStart=/bin/sh -c 'curl -sS -o /dev/null -w "trading-cycle=%%{http_code}\n" -X POST -H "Authorization: Bearer $INTERNAL_SECRET" http://127.0.0.1:8001/api/trading/desk/cycle/run'
