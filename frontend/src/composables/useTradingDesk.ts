@@ -325,6 +325,12 @@ export function useTradingDesk() {
       const status = bundle.run?.status
       const terminal = !!status && TERMINAL_STATUSES.includes(status)
       if (status === 'done') loadPortfolio()
+      // Once polling observes the run has left awaiting_approval (i.e. the
+      // approve POST succeeded and execution is progressing), it's safe to
+      // release the approve/deny buttons.
+      if (throughApproval && status !== 'awaiting_approval') {
+        actionLoading.value = false
+      }
       // At the approval gate the run is quiescent (waiting on the user) so we
       // normally stop — UNLESS we just approved, in which case we must keep
       // polling through awaiting_approval → executing → done to show the result.
@@ -433,6 +439,7 @@ export function useTradingDesk() {
     if (!runId) return
     actionLoading.value = true
     error.value = null
+    let approved = false
     try {
       // Re-sync first: the cards may be stale (the run can already have been
       // approved + executed in the background). Acting on a stale gate is what
@@ -444,17 +451,22 @@ export function useTradingDesk() {
         // Already moved on — follow it to its real outcome, no scary error.
         if (!TERMINAL_STATUSES.includes(st)) pollRun(runId, true)
         else if (st === 'done') loadPortfolio()
+        // actionLoading cleared in pollRun or here (terminal)
         return
       }
       const bundle = await apiPost<RunBundle>(`/api/trading/desk/runs/${runId}/approve`)
       runBundle.value = bundle
+      approved = true
       // Keep polling THROUGH the approval gate: execution runs in the background
       // (awaiting_approval → executing → done), so follow it to show the outcome.
+      // pollRun will clear actionLoading once status leaves awaiting_approval.
       pollRun(runId, true)
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to approve run'
     } finally {
-      actionLoading.value = false
+      // Only release the buttons immediately if we did NOT successfully kick off
+      // an approve — in that case pollRun is responsible for releasing them.
+      if (!approved) actionLoading.value = false
     }
   }
 
@@ -545,14 +557,14 @@ export function useTradingDesk() {
   const isDone = computed(() => runStatus.value === 'done')
 
   // workspace: which panel to show
-  const workspace = computed<'setup' | 'working' | 'cards' | 'monitoring' | 'error'>(() => {
+  const workspace = computed<'setup' | 'working' | 'cards' | 'monitoring' | 'error' | 'closed'>(() => {
     const s = runStatus.value
     if (!s) return 'setup'
     if (s === 'done') return 'monitoring'
     if (s === 'awaiting_approval') return 'cards'
     if (s === 'failed') return 'error'
-    // denied | cancelled → back to setup (user-initiated)
-    if (s === 'denied' || s === 'cancelled') return 'setup'
+    // denied | cancelled → dedicated closed state so the UI can surface it
+    if (s === 'denied' || s === 'cancelled') return 'closed'
     // researching | drafting | evaluating | executing
     return 'working'
   })

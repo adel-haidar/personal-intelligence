@@ -178,6 +178,7 @@ function confirmLiveApprove() {
 async function handleStart() {
   await startRun()
   showSetup.value = false
+  nextTick(() => rootRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 }
 
 async function handleReset() {
@@ -991,9 +992,31 @@ const latestEvent = computed(() => {
     </template>
 
     <!-- ─────────────────────────────────────────────────────────────────── -->
+    <!-- CLOSED workspace (denied or cancelled)                               -->
+    <!-- ─────────────────────────────────────────────────────────────────── -->
+    <template v-else-if="activeWorkspace === 'closed'">
+      <PiCard>
+        <div class="td-error-head">
+          <PIIcon name="close" :size="18" style="color:var(--text-tertiary);flex:0 0 auto" />
+          <span class="td-card-title">
+            {{ currentRun?.status === 'cancelled' ? 'Run cancelled' : 'Nothing was placed' }}
+          </span>
+        </div>
+        <p class="td-error-msg">
+          {{ currentRun?.status === 'cancelled'
+            ? 'The run was cancelled before any orders were placed.'
+            : 'The basket was denied. No orders were placed.' }}
+        </p>
+        <div style="display:flex;justify-content:flex-end;margin-top:var(--space-4);">
+          <PiButton variant="cta" icon="play" @click="handleReset">Ask the team to redraft</PiButton>
+        </div>
+      </PiCard>
+    </template>
+
+    <!-- ─────────────────────────────────────────────────────────────────── -->
     <!-- ERROR — the run failed                                               -->
     <!-- ─────────────────────────────────────────────────────────────────── -->
-    <template v-if="activeWorkspace === 'error'">
+    <template v-else-if="activeWorkspace === 'error'">
       <PiCard>
         <div class="td-error-head">
           <PIIcon name="shield" :size="18" style="color:var(--danger);flex:0 0 auto" />
