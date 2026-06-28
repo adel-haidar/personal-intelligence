@@ -321,14 +321,36 @@ async function deleteAll() {
     <!-- ══ INVESTMENTS ══ -->
     <InvestingPanel v-else-if="activeTab === 'investments'" />
 
-    <!-- ══ TRADING (Agent Trading Desk) ══ -->
+    <!-- ══ TRADING ══ -->
     <template v-else-if="activeTab === 'trading'">
+      <!-- ── Section 1 · AI Trading Desk (agents can place real orders) ── -->
+      <header style="display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5);">
+        <div>
+          <h2 style="font-family: var(--font-display); font-weight: 600; font-size: var(--text-xl); margin: 0;">AI Trading Desk</h2>
+          <p class="t-secondary" style="font-size: var(--text-sm); margin: var(--space-2) 0 0; max-width: 60ch;">
+            Your agents research the market, draft sized trades, and — only with your approval — place them through your connected broker.
+          </p>
+        </div>
+        <span style="display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border-subtle); font-size: var(--text-xs); font-weight: 600; color: var(--accent-primary); white-space: nowrap;">
+          <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent-primary);" />
+          Can place real orders
+        </span>
+      </header>
       <TradingDeskPanel />
-      <!-- Legacy day-trading analysis (market snapshot / buy-hold-sell recommendations) -->
-      <div style="margin-top: var(--space-8); padding-top: var(--space-6); border-top: 1px solid var(--border-subtle);">
-        <div style="font-family: var(--font-display); font-weight: 600; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); margin-bottom: var(--space-4);">Market snapshot analysis</div>
-        <DayTradingPanel />
-      </div>
+
+      <!-- ── Section 2 · Day-trading signals (legacy, analysis only) ── -->
+      <header style="display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-top: var(--space-8); padding-top: var(--space-6); border-top: 1px solid var(--border-subtle); margin-bottom: var(--space-5);">
+        <div>
+          <h2 style="font-family: var(--font-display); font-weight: 600; font-size: var(--text-xl); margin: 0;">Day-trading signals</h2>
+          <p class="t-secondary" style="font-size: var(--text-sm); margin: var(--space-2) 0 0; max-width: 60ch;">
+            A live market snapshot with buy / hold / sell ideas to inform your own decisions. Analysis only — nothing here is ever placed automatically.
+          </p>
+        </div>
+        <span style="display: inline-flex; align-items: center; flex-shrink: 0; padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border-subtle); font-size: var(--text-xs); font-weight: 600; color: var(--text-tertiary); white-space: nowrap;">
+          Read-only
+        </span>
+      </header>
+      <DayTradingPanel />
     </template>
   </div>
 
