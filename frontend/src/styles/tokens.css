@@ -18,7 +18,7 @@
 
   --text-primary:          #1C1B2E;
   --text-secondary:        #5A5970;
-  --text-tertiary:         #9896A8;
+  --text-tertiary:         #6E6C82;  /* ≥4.5:1 on white — was #9896A8 (~3:1, failed WCAG 1.4.3) */
 
   --accent-primary:        #5B5BD6;
   --accent-hover:          #4A4ABE;
@@ -54,7 +54,7 @@
 
   --text-primary:          #E4E4F0;
   --text-secondary:        #9090AA;
-  --text-tertiary:         #5A5A70;
+  --text-tertiary:         #8A8AA2;  /* ≥4.5:1 on dark surfaces — was #5A5A70 (~2.3:1, failed WCAG 1.4.3) */
 
   --accent-primary:        #7C7EE0;
   --accent-hover:          #9092E8;

@@ -106,12 +106,17 @@ function isLocked(item: NavItem): boolean {
   return !meetsPlan(item.requiresPlan)
 }
 
-function handleNavClick(item: NavItem, navigate: () => void) {
+// Nav items are real <a> links (open-in-new-tab, middle-click, right-click all
+// work). For locked tiers we intercept the activation and route to /subscribe
+// instead; `navigate` already no-ops on modifier-clicks so ⌘/ctrl-click on an
+// unlocked item still opens a new tab via the href.
+function handleNavClick(item: NavItem, navigate: (e: MouseEvent) => void, e: MouseEvent) {
   if (isLocked(item)) {
+    e.preventDefault()
     router.push(`/subscribe?feature=${encodeURIComponent(item.to)}`)
     return
   }
-  navigate()
+  navigate(e)
 }
 
 const NAV_SYS: NavItem[] = [
@@ -135,13 +140,14 @@ const NAV_SYS: NavItem[] = [
         :key="item.to"
         :to="item.to"
         custom
-        v-slot="{ isActive, navigate }"
+        v-slot="{ href, isActive, navigate }"
       >
-        <button
+        <a
+          :href="href"
           :class="['pi-nav__item', item.brain ? 'pi-nav__item--brain' : '', isActive ? 'pi-nav__item--active' : '', isLocked(item) ? 'pi-nav__item--locked' : '']"
           :aria-current="isActive ? 'page' : undefined"
           :aria-label="isLocked(item) ? t('a11y.lockedFeature', { name: t('nav.' + item.key) }) : t('nav.' + item.key)"
-          @click="handleNavClick(item, navigate)"
+          @click="handleNavClick(item, navigate, $event)"
         >
           <!-- Brain item: animated BrainPulse normally; a static 💤 while the
                Brain Organiser is running ("your brain is sleeping"). -->
@@ -170,7 +176,7 @@ const NAV_SYS: NavItem[] = [
             class="pi-nav__lock-badge"
             aria-hidden="true"
           >{{ item.requiresPlan?.toUpperCase() }}</span>
-        </button>
+        </a>
       </RouterLink>
 
       <!-- Divider + system nav -->
@@ -181,9 +187,10 @@ const NAV_SYS: NavItem[] = [
         :key="item.to"
         :to="item.to"
         custom
-        v-slot="{ isActive, navigate }"
+        v-slot="{ href, isActive, navigate }"
       >
-        <button
+        <a
+          :href="href"
           :class="['pi-nav__item', isActive ? 'pi-nav__item--active' : '']"
           :aria-current="isActive ? 'page' : undefined"
           :aria-label="t('nav.' + item.key)"
@@ -191,7 +198,7 @@ const NAV_SYS: NavItem[] = [
         >
           <PIIcon :name="item.icon" :size="18" />
           <span class="pi-nav__label">{{ t('nav.' + item.key) }}</span>
-        </button>
+        </a>
       </RouterLink>
     </nav>
 

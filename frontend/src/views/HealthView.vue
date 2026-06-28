@@ -11,6 +11,7 @@ import {
 import PageHead from '../components/ui/PageHead.vue'
 import PiCard from '../components/ui/PiCard.vue'
 import PIIcon from '../components/ui/PIIcon.vue'
+import { useFocusTrap } from '../composables/useFocusTrap'
 import PiButton from '../components/ui/PiButton.vue'
 import UploadBanner from '../components/ui/UploadBanner.vue'
 import StatusPill from '../components/ui/StatusPill.vue'
@@ -136,6 +137,9 @@ function openGuide(platform: 'ios' | 'android') {
 
 // ── Devices ─────────────────────────────────────────────────────────────────────
 const addDeviceOpen = ref(false)
+// Focus trap + Escape + focus restore for the "Add a device" modal.
+const addDeviceDialog = ref<HTMLElement | null>(null)
+useFocusTrap(addDeviceDialog, () => addDeviceOpen.value, { onEscape: () => { addDeviceOpen.value = false } })
 
 function statusSource(source: 'apple_watch' | 'beurer_scale' | 'samsung_health') {
   return healthStatus.value?.sources.find(s => s.source === source)
@@ -732,7 +736,7 @@ onMounted(async () => {
   <!-- Add device modal -->
   <Teleport to="body">
     <div v-if="addDeviceOpen" class="pi-modal-overlay" role="dialog" aria-modal="true" @click="addDeviceOpen = false">
-      <div class="pi-modal" style="max-width: 600px; max-height: 85vh; overflow: auto;" @click.stop>
+      <div ref="addDeviceDialog" class="pi-modal" style="max-width: 600px; max-height: 85vh; overflow: auto;" @click.stop>
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4);">
           <div class="pi-modal__title" style="margin: 0;">Add a device</div>
           <button class="pi-btn pi-btn--icon" aria-label="Close" @click="addDeviceOpen = false"><PIIcon name="close" :size="18" /></button>

@@ -27,6 +27,7 @@
 
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useFocusTrap } from '../composables/useFocusTrap'
 import BrainPulse from '../components/ui/BrainPulse.vue'
 import PiCard from '../components/ui/PiCard.vue'
 import PiTextarea from '../components/ui/PiTextarea.vue'
@@ -77,6 +78,9 @@ const initialLoading = ref(true)
 const justAddedId = ref<string | null>(null)
 const hoverId = ref<string | null>(null)
 const viewing = ref<Memory | null>(null)  // memory shown in the "View full" modal
+// Focus trap + Escape + focus restore for the "View full" modal.
+const viewingDialog = ref<HTMLElement | null>(null)
+useFocusTrap(viewingDialog, () => viewing.value !== null, { onEscape: () => { viewing.value = null } })
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const sentinelRef = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
@@ -601,7 +605,7 @@ const hasMore = computed(() => page.value < pages.value)
     <!-- View full modal                                                      -->
     <!-- ------------------------------------------------------------------ -->
     <div v-if="viewing" class="brain-modal" @click.self="viewing = null">
-      <div class="brain-modal__panel" role="dialog" aria-modal="true">
+      <div ref="viewingDialog" class="brain-modal__panel" role="dialog" aria-modal="true">
         <div class="brain-modal__head">
           <span class="brain-modal__source">
             <PIIcon :name="SOURCE_META[deriveSource(viewing.tags)].icon" :size="14" />

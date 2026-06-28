@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { useFocusTrap } from '../../composables/useFocusTrap'
 import type { JobMatch, JobApplication } from '../../types/jobs'
 import {
   startApplication,
@@ -185,12 +186,16 @@ function onClose(): void {
 
 onMounted(init)
 onBeforeUnmount(() => { stopPolling(); revokePdf() })
+
+// Escape to close + trap Tab focus (modal is mounted only while open).
+const dialogEl = ref<HTMLElement | null>(null)
+useFocusTrap(dialogEl, () => true, { onEscape: onClose })
 </script>
 
 <template>
   <Teleport to="body">
   <div class="modal-backdrop" @click.self="onClose">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Job application">
+    <div ref="dialogEl" class="modal" role="dialog" aria-modal="true" aria-label="Job application">
       <header class="modal-head">
         <div class="head-text">
           <h2 class="modal-title">Application</h2>

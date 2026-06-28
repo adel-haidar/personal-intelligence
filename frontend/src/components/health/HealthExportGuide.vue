@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { watch, onBeforeUnmount } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import PIIcon from '../ui/PIIcon.vue'
 import PiButton from '../ui/PiButton.vue'
 import IconButton from '../ui/IconButton.vue'
 import PhoneMock from './PhoneMock.vue'
+import { useFocusTrap } from '../../composables/useFocusTrap'
 
 // ── Props / emits ──────────────────────────────────────────────────────────
 interface Props {
@@ -16,12 +17,9 @@ const emit = defineEmits<{
   (e: 'update:platform', p: 'ios' | 'android'): void
 }>()
 
-// ── Body-scroll lock + Escape key ─────────────────────────────────────────
+// ── Body-scroll lock ───────────────────────────────────────────────────────
+// (Escape, focus trap and focus restore are handled by useFocusTrap below.)
 let prevOverflow = ''
-
-function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
-}
 
 watch(
   () => props.open,
@@ -29,10 +27,8 @@ watch(
     if (open) {
       prevOverflow = document.body.style.overflow
       document.body.style.overflow = 'hidden'
-      window.addEventListener('keydown', onKey)
     } else {
       document.body.style.overflow = prevOverflow
-      window.removeEventListener('keydown', onKey)
     }
   },
   { immediate: true },
@@ -40,8 +36,10 @@ watch(
 
 onBeforeUnmount(() => {
   document.body.style.overflow = prevOverflow
-  window.removeEventListener('keydown', onKey)
 })
+
+const dialogEl = ref<HTMLElement | null>(null)
+useFocusTrap(dialogEl, () => props.open, { onEscape: () => emit('close') })
 
 // ── Step content (static) ─────────────────────────────────────────────────
 interface Step {
@@ -112,6 +110,7 @@ const GUIDES: Record<'ios' | 'android', { label: string; steps: Step[] }> = {
       @click="emit('close')"
     >
       <div
+        ref="dialogEl"
         class="pi-modal"
         role="dialog"
         aria-modal="true"

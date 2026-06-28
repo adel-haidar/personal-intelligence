@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import PiButton from './ui/PiButton.vue'
 import PIIcon from './ui/PIIcon.vue'
+import { useFocusTrap } from '../composables/useFocusTrap'
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 interface Props {
@@ -87,14 +88,9 @@ watch(() => props.open, (open) => {
   }
 })
 
-// ── Keyboard close ────────────────────────────────────────────────────────────
-function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('close')
-}
-watch(() => props.open, (open) => {
-  if (open) window.addEventListener('keydown', onKey)
-  else window.removeEventListener('keydown', onKey)
-}, { immediate: true })
+// ── Keyboard close + focus trap ───────────────────────────────────────────────
+const dialogEl = ref<HTMLElement | null>(null)
+useFocusTrap(dialogEl, () => props.open, { onEscape: () => emit('close') })
 
 // ── Submit ────────────────────────────────────────────────────────────────────
 function submit() {
@@ -129,6 +125,7 @@ const currentError = computed(() =>
   <Teleport to="body">
     <div
       v-if="open"
+      ref="dialogEl"
       class="gp-overlay"
       role="dialog"
       aria-modal="true"

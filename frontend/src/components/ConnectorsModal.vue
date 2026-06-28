@@ -16,6 +16,7 @@ import IconButton from './ui/IconButton.vue'
 import PiButton from './ui/PiButton.vue'
 import { useToast } from './ui/useToast'
 import { useConnectors, onConnectSuccess, onConnectError } from '../composables/useConnectors'
+import { useFocusTrap } from '../composables/useFocusTrap'
 import type { Connector } from '../types/connector'
 
 const emit = defineEmits<{
@@ -122,10 +123,9 @@ onBeforeUnmount(() => {
   unsubError?.()
 })
 
-// ── Keyboard close ────────────────────────────────────────────────────────────
-function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') emit('close')
-}
+// ── Keyboard close + focus trap (modal is mounted only while open) ─────────────
+const dialogEl = ref<HTMLElement | null>(null)
+useFocusTrap(dialogEl, () => true, { onEscape: () => emit('close') })
 
 // Tile order is driven by the backend (GET /api/connectors).
 const orderedConnectors = computed<Connector[]>(() => connectors.value)
@@ -134,12 +134,12 @@ const orderedConnectors = computed<Connector[]>(() => connectors.value)
 <template>
   <!-- Overlay -->
   <div
+    ref="dialogEl"
     class="cm-overlay"
     role="dialog"
     aria-modal="true"
     aria-label="Connect your world"
     @click.self="$emit('close')"
-    @keydown="onKeydown"
   >
     <div class="cm-panel">
       <!-- Header -->
