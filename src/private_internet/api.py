@@ -15,6 +15,8 @@ from private_internet.brain.db import init_brain_db
 from private_internet.brain.routes import router as brain_router
 from private_internet.connectors.db import init_connectors_db
 from private_internet.connectors.routes import router as connectors_router
+from private_internet.bank_link.db import init_bank_link_db
+from private_internet.bank_link.routes import router as bank_router
 from private_internet.config import get_settings
 from private_internet.content.aria.db import init_aria_db
 from private_internet.content.aria.podcast_db import init_aria_podcast_db
@@ -129,6 +131,8 @@ async def lifespan(app: FastAPI):
     # Connectors schema depends on the memories table existing (connector_items
     # records memory_id TEXT references from memory/service.py).
     _bootstrap_step("init_connectors_db", init_connectors_db)
+    # Bank-link tables (GoCardless): reference memory_id TEXT from memory/service.py.
+    _bootstrap_step("init_bank_link_db", init_bank_link_db)
     # Non-fatal: warn (don't fail startup) if podcast voices are still placeholders.
     _bootstrap_step("check_podcast_voices", warn_if_podcast_voices_unconfigured)
 
@@ -179,6 +183,9 @@ app.include_router(brain_router)
 # Connectors (external platform import: Notion, GitHub, Google Drive, …).
 # The OAuth callback route carries no auth dependency (provider calls it directly).
 app.include_router(connectors_router)
+# Bank linking (GoCardless PSD2). The /callback route carries no auth dependency
+# (GoCardless redirects the user's browser there); /poll-all uses INTERNAL_SECRET.
+app.include_router(bank_router)
 # Global sharing. The public GET /api/share/{token} carries no auth dependency
 # (it serves only a denormalised snapshot); POST/list/DELETE are per-route auth'd.
 app.include_router(sharing_router)

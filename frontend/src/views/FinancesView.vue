@@ -17,6 +17,7 @@ import SpendingBudgetPanel from '../components/finances/SpendingBudgetPanel.vue'
 import InvestingPanel from '../components/finances/InvestingPanel.vue'
 import DayTradingPanel from '../components/finances/DayTradingPanel.vue'
 import TradingDeskPanel from '../components/finances/TradingDeskPanel.vue'
+import BankConnectCard from '../components/finances/BankConnectCard.vue'
 import GoalPrompt from '../components/GoalPrompt.vue'
 import { useBankAdviser, type AnalysisParams } from '../composables/useBankAdviser'
 import { requireAuth } from '../composables/useAuth'
@@ -228,6 +229,9 @@ async function deleteAll() {
 
     <!-- ══ OVERVIEW ══ -->
     <template v-if="activeTab === 'overview'">
+      <!-- Connect a bank for automatic daily statement sync (replaces monthly uploads). -->
+      <BankConnectCard />
+
       <PiCard v-if="status === 'loading'" style="margin-bottom: var(--space-6);">
         <div class="pi-progress pi-progress--thin"><div class="pi-progress__track"><div class="pi-progress__fill" style="width: 40%;" /></div></div>
         <p class="t-secondary" style="font-size: var(--text-sm); margin-top: var(--space-3);">Analysing your statements…</p>

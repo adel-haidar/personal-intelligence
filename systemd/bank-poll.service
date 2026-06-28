@@ -1,0 +1,13 @@
+[Unit]
+Description=Poll every connected bank (GoCardless) and upsert statement memories
+After=network.target personal-intelligence-api.service
+Wants=personal-intelligence-api.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/home/ec2-user/personal-intelligence/.env
+# Bank-link routes are served by the API service on port 8000. Same-host auth
+# uses INTERNAL_SECRET via the X-Internal-Secret header (the content/job timers
+# use the same guard). poll-all fans over every CONNECTED user; one user's
+# failure is recorded as 'error' and never aborts the rest.
+ExecStart=/bin/sh -c 'curl -sS -o /dev/null -w "bank-poll=%%{http_code}\n" -X POST -H "X-Internal-Secret: $INTERNAL_SECRET" http://127.0.0.1:8000/api/bank/poll-all'

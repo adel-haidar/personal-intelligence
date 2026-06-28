@@ -176,6 +176,12 @@ class Settings(BaseSettings):
     # GitHub: register redirect URI {base_url}/api/connectors/github/callback
     github_client_id: str = ""
     github_client_secret: str = ""
+    # Bank linking via GoCardless Bank Account Data (PSD2 AISP). One operator-level
+    # credential pair (no per-user bank credentials are ever stored). Register the
+    # consent redirect URI {base_url}/api/bank/callback in the GoCardless portal.
+    gocardless_secret_id: str = ""
+    gocardless_secret_key: str = ""
+    gocardless_base_url: str = "https://bankaccountdata.gocardless.com"
 
     @property
     def base_url(self) -> str:

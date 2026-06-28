@@ -1,0 +1,9 @@
+[Unit]
+Description=Poll connected bank accounts daily at 05:00 and refresh brain statements
+
+[Timer]
+OnCalendar=*-*-* 05:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
